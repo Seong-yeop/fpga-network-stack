@@ -42,11 +42,11 @@ const uint16_t MAX_SESSIONS = TCP_STACK_MAX_SESSIONS;
 const unsigned DATA_WIDTH_BITS = ConstLog2(DATA_WIDTH);
 const unsigned DATA_KEEP_BITS = ConstLog2(DATA_WIDTH/8);
 
-const unsigned WINDOW_SCALE_BITS = 2;
+const unsigned WINDOW_SCALE_BITS = 3;
 #if (WINDOW_SCALE)
-const unsigned WINDOW_BITS = 16 + WINDOW_SCALE_BITS;
+const unsigned WINDOW_BITS = 15 + WINDOW_SCALE_BITS;
 #else
-const unsigned WINDOW_BITS = 16;
+const unsigned WINDOW_BITS = 15;
 #endif
 
 const unsigned BUFFER_SIZE = (1 << WINDOW_BITS);
@@ -216,4 +216,41 @@ void toe_core(	// Data & Memory Interface
 			ap_uint<16>&							regSessionCount);
 
 
+
+// Simulation wrapper using net_axis types (for C simulation with testbench)
+void toe(	// Data & Memory Interface
+			hls::stream<net_axis<DATA_WIDTH> >&				ipRxData,
+			hls::stream<mmStatus>&							rxBufferWriteStatus,
+			hls::stream<mmStatus>&							txBufferWriteStatus,
+			hls::stream<net_axis<DATA_WIDTH> >&				rxBufferReadData,
+			hls::stream<net_axis<DATA_WIDTH> >&				txBufferReadData,
+			hls::stream<net_axis<DATA_WIDTH> >&				ipTxData,
+			hls::stream<mmCmd>&								rxBufferWriteCmd,
+			hls::stream<mmCmd>&								rxBufferReadCmd,
+			hls::stream<mmCmd>&								txBufferWriteCmd,
+			hls::stream<mmCmd>&								txBufferReadCmd,
+			hls::stream<net_axis<DATA_WIDTH> >&				rxBufferWriteData,
+			hls::stream<net_axis<DATA_WIDTH> >&				txBufferWriteData,
+			// SmartCam Interface
+			hls::stream<rtlSessionLookupReply>&				sessionLookup_rsp,
+			hls::stream<rtlSessionUpdateReply>&				sessionUpdate_rsp,
+			hls::stream<rtlSessionLookupRequest>&			sessionLookup_req,
+			hls::stream<rtlSessionUpdateRequest>&			sessionUpdate_req,
+			// Application Interface
+			hls::stream<ap_uint<16> >&						listenPortReq,
+			hls::stream<appReadRequest>&					rxDataReq,
+			hls::stream<ipTuple>&							openConnReq,
+			hls::stream<ap_uint<16> >&						closeConnReq,
+			hls::stream<appTxMeta>&							txDataReqMeta,
+			hls::stream<net_axis<DATA_WIDTH> >&				txDataReq,
+			hls::stream<bool>&								listenPortRsp,
+			hls::stream<appNotification>&					notification,
+			hls::stream<ap_uint<16> >&						rxDataRspMeta,
+			hls::stream<net_axis<DATA_WIDTH> >&				rxDataRsp,
+			hls::stream<openStatus>&						openConnRsp,
+			hls::stream<appTxRsp>&							txDataRsp,
+			//IP Address Input
+			ap_uint<32>										myIpAddress,
+			//statistic
+			ap_uint<16>&									regSessionCount);
 #endif
