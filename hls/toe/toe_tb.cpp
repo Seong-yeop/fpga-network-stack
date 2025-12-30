@@ -30,11 +30,37 @@
 #include "session_lookup_controller/session_lookup_controller.hpp"
 #include <map>
 #include <string>
+#include <vector>
+#include <cstring>
+#include <iomanip>
 
 #define noOfTxSessions 0 // Number of Tx Sessions to open for testing
-#define totalSimCycles 2500000
+#define totalSimCycles 3000000
 
 using namespace std;
+
+// DDR Write Record for verification
+struct DdrWriteRecord {
+    ap_uint<16> sessionId;
+    ap_uint<WINDOW_BITS> addr;  // Extended for WINDOW_SCALE support
+    uint32_t length;
+    std::vector<uint8_t> data;
+};
+std::vector<DdrWriteRecord> ddrWriteRecords;
+
+// Expected TCP payload from input file
+struct ExpectedPayload {
+    std::vector<uint8_t> data;
+    uint16_t packetIndex;
+};
+std::vector<ExpectedPayload> expectedPayloads;
+
+// Received payload from rxDataOut (application output)
+struct ReceivedPayload {
+    std::vector<uint8_t> data;
+};
+std::vector<ReceivedPayload> receivedPayloads;
+static ReceivedPayload currentReceivedPayload;  // For accumulating data across words
 
 uint32_t cycleCounter;
 unsigned int	simCycleCounter		= 0;
@@ -87,49 +113,89 @@ void simulateRx(dummyMemory<WIDTH>* memory, stream<mmCmd>& WriteCmdFifo,  stream
 	static uint32_t rxMemCounterRd = 0;
 
 	static bool stx_write = false;
-	static bool stx_read = false;
+	// stx_read removed - read commands now processed atomically
 
-	static bool stx_readCmd = false;
 	static ap_uint<16> wrBufferWriteCounter = 0;
 	static ap_uint<16> wrBufferReadCounter = 0;
+
+	// For verification: track current write record
+	static DdrWriteRecord currentRecord;
 
 	if (!WriteCmdFifo.empty() && !stx_write) {
 		WriteCmdFifo.read(cmd);
 		memory->setWriteCmd(cmd);
-		//cerr << dec << "mem write cmd " << cmd.saddr << ", " << cmd.bbt << std::endl;
+		// Extract session ID and address matching dummyMemory format:
+		// cmd.saddr[29:WINDOW_BITS] = sessionID, cmd.saddr[WINDOW_BITS-1:0] = offset
+		ap_uint<16> sessId = cmd.saddr(29, WINDOW_BITS);
+		ap_uint<WINDOW_BITS> addr = cmd.saddr(WINDOW_BITS-1, 0);
+		cerr << "[RX Write Cmd] sessionID=0x" << hex << (uint16_t)sessId
+		     << " addr=0x" << (uint32_t)addr
+		     << " len=" << dec << (uint16_t)cmd.bbt << endl;
 		wrBufferWriteCounter = cmd.bbt;
 		stx_write = true;
+
+		// Start new record
+		currentRecord.sessionId = sessId;
+		currentRecord.addr = addr;
+		currentRecord.length = cmd.bbt;
+		currentRecord.data.clear();
 	}
 	else if (!BufferIn.empty() && stx_write) {
 		BufferIn.read(inWord);
-		//cerr << dec << rxMemCounter << " - " << hex << inWord.data << " " << inWord.keep << " " << inWord.last << " " << dec << wrBufferWriteCounter << endl;
-		//rxMemCounter++;
 		memory->writeWord(inWord);
-		if (wrBufferWriteCounter < (WIDTH/8)) {
-			//fake_txBuffer.write(inWord); // RT hack
+
+		// Record the written bytes
+		for (int i = 0; i < (WIDTH/8); i++) {
+			if (inWord.keep[i]) {
+				currentRecord.data.push_back((uint8_t)(inWord.data((i*8)+7, i*8)));
+			}
+		}
+
+		if (wrBufferWriteCounter <= (WIDTH/8)) {
 			stx_write = false;
 			status.okay = 1;
 			WriteStatusFifo.write(status);
-			//cerr << "write status" << endl;
+
+			// Save completed record
+			ddrWriteRecords.push_back(currentRecord);
+			cerr << "[RX Write Complete] sessionID=0x" << hex << (uint16_t)currentRecord.sessionId
+			     << " addr=0x" << (uint32_t)currentRecord.addr
+			     << " len=" << dec << currentRecord.data.size() << " bytes" << endl;
 		}
 		else
 			wrBufferWriteCounter -= (WIDTH/8);
 	}
-	if (!ReadCmdFifo.empty() && !stx_read) {
+	// Process read commands atomically (all data for a command before accepting new command)
+	// This matches real HW behavior where DMA transfers complete before the next one starts.
+	// Without this, rxAppMemDataRead may read doubleAccess before corresponding data is ready,
+	// causing FIFO desynchronization.
+	if (!ReadCmdFifo.empty()) {
 		ReadCmdFifo.read(cmd);
 		memory->setReadCmd(cmd);
+		ap_uint<16> readSessId = cmd.saddr(29, WINDOW_BITS);
+		ap_uint<WINDOW_BITS> readOffset = cmd.saddr(WINDOW_BITS-1, 0);
+		cerr << "[simulateRx READ CMD] sessionID=0x" << hex << (uint16_t)readSessId
+		     << " addr=0x" << (uint32_t)readOffset
+		     << " len=" << dec << (uint16_t)cmd.bbt << endl;
 		wrBufferReadCounter = cmd.bbt;
-		stx_read = true;
-	}
-	else if(stx_read) {
-		memory->readWord(outWord);
-		BufferOut.write(outWord);
-		//cerr << dec << rxMemCounterRd << " - " << hex << outWord.data << " " << outWord.keep << " " << outWord.last << endl;
-		rxMemCounterRd++;;
-		if (wrBufferReadCounter < (WIDTH/8))
-			stx_read = false;
-		else
-			wrBufferReadCounter -= (WIDTH/8);
+
+		// Process all words for this command atomically
+		do {
+			memory->readWord(outWord);
+			BufferOut.write(outWord);
+			int keepLen = 0;
+			for (int i = 0; i < (WIDTH/8); i++) {
+				if (outWord.keep[i]) keepLen++;
+			}
+			// cerr << "[simulateRx READ DATA] keepLen=" << dec << keepLen
+			//      << " last=" << (int)outWord.last
+			//      << " remaining=" << (int)wrBufferReadCounter << endl;
+			rxMemCounterRd++;
+			if (wrBufferReadCounter <= (WIDTH/8))
+				wrBufferReadCounter = 0;
+			else
+				wrBufferReadCounter -= (WIDTH/8);
+		} while (wrBufferReadCounter > 0);
 	}
 }
 
@@ -357,7 +423,7 @@ ap_uint<8> encodeApUint8(string keepString){
 
 ap_uint<16> checksumComputation(deque<net_axis<64> >	pseudoHeader) {
 	ap_uint<32> tcpChecksum = 0;
-	for (uint8_t i=0;i<pseudoHeader.size();++i) {
+	for (size_t i=0;i<pseudoHeader.size();++i) {
 		ap_uint<64> tempInput = (pseudoHeader[i].data.range(7, 0), pseudoHeader[i].data.range(15, 8), pseudoHeader[i].data.range(23, 16), pseudoHeader[i].data.range(31, 24), pseudoHeader[i].data.range(39, 32), pseudoHeader[i].data.range(47, 40), pseudoHeader[i].data.range(55, 48), pseudoHeader[i].data.range(63, 56));
 		//cerr << hex << tempInput << " " << pseudoHeader[i].data << endl;
 		tcpChecksum = ((((tcpChecksum + tempInput.range(63, 48)) + tempInput.range(47, 32)) + tempInput.range(31, 16)) + tempInput.range(15, 0));
@@ -393,7 +459,7 @@ ap_uint<16> recalculateChecksum(deque<net_axis<64> > inputPacketizer) {
 	inputPacketizer[4].data.range(47, 32)	= 0x0;
 	//ap_uint<32> temp	= (tcpLength, 0x0600);
 	inputPacketizer[1].data.range(63, 32) 	= inputPacketizer[2].data.range(63, 32);
-	for (uint8_t i=2;i<inputPacketizer.size() -1;++i)
+	for (size_t i=2;i<inputPacketizer.size() -1;++i)
 		inputPacketizer[i]= inputPacketizer[i+1];
 	inputPacketizer.pop_back();
 	//for (uint8_t i=0;i<inputPacketizer.size();++i)
@@ -535,17 +601,15 @@ bool parseOutputPacket(deque<net_axis<64> > &outputPacketizer, map<fourTuple, ap
 }
 
 void flushInputPacketizer(deque<net_axis<64> > &inputPacketizer, stream<net_axis<64> > &ipRxData, map<fourTuple, ap_uint<32> > &sessionList) {
-	//std::cout << "input packetizer: " << inputPacketizer.size() << std::endl;
 	if (inputPacketizer.size() != 0) {
 		injectAckNumber(inputPacketizer, sessionList);
-		uint8_t inputPacketizerSize = inputPacketizer.size();
-		for (uint8_t i=0;i<inputPacketizerSize;++i) {
+		size_t inputPacketizerSize = inputPacketizer.size();
+		for (size_t i=0;i<inputPacketizerSize;++i) {
 			net_axis<64> temp = inputPacketizer.front();
 			ipRxData.write(temp);
 			inputPacketizer.pop_front();
 		}
 	}
-	//std::cout << "after input packetizer: " << inputPacketizer.size() << std::endl;
 }
 
 vector<string> parseLine(string stringBuffer) {
@@ -742,7 +806,12 @@ int main(int argc, char *argv[]) {
 		}
 	}
 //	while (simCycleCounter < totalSimCycles) {
+	static int loopCount = 0;
 	do {
+		loopCount++;
+		if (loopCount % 1000 == 0) {
+			// cerr << "[TB] Loop iteration: " << loopCount << endl;
+		}
 		if (idleCycle == true) {
 			if (cycleCounter >= skipCounter) {
 				cycleCounter = 0;
@@ -769,19 +838,65 @@ int main(int argc, char *argv[]) {
 				//break;
 				}
 				else {
+					static uint16_t inputPacketCount = 0;
 					do {
 						if (firstWordFlag == false) {
 							getline(rxInputFile, stringBuffer);
+							if (rxInputFile.fail() || stringBuffer.empty()) {
+								cerr << "ERROR: Unexpected EOF or empty line in input file!" << endl;
+								break;
+							}
 							stringVector = parseLine(stringBuffer);
+							if (stringVector.size() < 3) {
+								cerr << "ERROR: Invalid line format: " << stringBuffer << endl;
+								break;
+							}
 						}
 						firstWordFlag = false;
 						string tempString = "0000000000000000";
 						ipRxData_Data = net_axis<64>(encodeApUint64(stringVector[0]), encodeApUint8(stringVector[2]), atoi(stringVector[1].c_str()));
 						inputPacketizer.push_back(ipRxData_Data);
+						
+						// std::cout << "Input Packetizer Size: " << inputPacketizer.size() << std::endl;
 					} while (ipRxData_Data.last != 1);
 					firstWordFlag = true;
+
+					// === Extract TCP Payload from input packet ===
+					// Packet structure: Word 0-4 = IP+TCP headers (40 bytes), Word 5+ = Payload
+					if (inputPacketizer.size() > 5) {  // Has payload
+						ExpectedPayload payload;
+						payload.packetIndex = inputPacketCount;
+
+						// Extract payload bytes (starting from word 5)
+						for (size_t w = 5; w < inputPacketizer.size(); w++) {
+							net_axis<64>& word = inputPacketizer[w];
+							for (int b = 0; b < 8; b++) {
+								if (word.keep[b]) {
+									payload.data.push_back((uint8_t)(word.data((b*8)+7, b*8)));
+								}
+							}
+						}
+
+						if (payload.data.size() > 0) {
+							expectedPayloads.push_back(payload);
+							cerr << "[Input Packet " << inputPacketCount << "] TCP Payload: "
+							     << payload.data.size() << " bytes - ";
+							for (size_t i = 0; i < min((size_t)16, payload.data.size()); i++) {
+								cerr << hex << setw(2) << setfill('0') << (int)payload.data[i] << " ";
+							}
+							if (payload.data.size() > 16) cerr << "...";
+							cerr << endl;
+						}
+					}
+					inputPacketCount++;
+					// === End Extract ===
+
+					// cerr << "[TB] Before flushInputPacketizer, inputPacketizer.size=" << inputPacketizer.size() << endl;
 					flushInputPacketizer(inputPacketizer, ipRxData64, sessionList);
+					// cerr << "[TB] After flushInputPacketizer, ipRxData64.size=" << ipRxData64.size() << endl;
+					// cerr << "[TB] Before convertPacketWidth" << endl;
 					convertPacketWidth(ipRxData64, ipRxData);
+					// cerr << "[TB] After convertPacketWidth, ipRxData.size=" << ipRxData.size() << endl;
 				}
 			}
 			if (testTxPath == true && txSessionIDs.size() > 0) {
@@ -810,6 +925,7 @@ int main(int argc, char *argv[]) {
 						string tempString = "0000000000000000";
 						ipTxDataIn_Data = net_axis<64>(encodeApUint64(txStringVector[0]), encodeApUint8(txStringVector[2]), atoi(txStringVector[1].c_str()));
 						txDataReq64.write(ipTxDataIn_Data);
+						// std::cout << "Tx Input Packetizer Size: " << txDataReq64.size() << std::endl;
 					} while (ipTxDataIn_Data.last != 1);
 					convertPacketWidth(txDataReq64, txDataReq);
 					firstWordFlag = true;
@@ -817,18 +933,26 @@ int main(int argc, char *argv[]) {
 			}
 //			}
 		}
+		// cerr << "[TB] Before toe() - ipRxData.size=" << ipRxData.size() << endl;
+#if !(RX_DDR_BYPASS)
 		toe(ipRxData, rxBufferWriteStatus, txBufferWriteStatus, rxBufferReadData, txBufferReadData, ipTxData, rxBufferWriteCmd,
 			rxBufferReadCmd, txBufferWriteCmd, txBufferReadCmd, rxBufferWriteData, txBufferWriteData, sessionLookup_rsp, sessionUpdate_rsp,
 			sessionLookup_req, sessionUpdate_req, listenPortReq, rxDataReq, openConnReq, closeConnReq, txDataReqMeta, txDataReq,
-			//listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp);
-			//relSessionCount, regSessionCount);
-			listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp, 0x01010101, /*relSessionCount,*/ regSessionCount);
+			listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp, 0x01010101, regSessionCount);
+#else
+		toe(ipRxData, txBufferWriteStatus, rxBufferReadData, txBufferReadData, ipTxData,
+			txBufferWriteCmd, txBufferReadCmd, rxBufferWriteData, txBufferWriteData, sessionLookup_rsp, sessionUpdate_rsp,
+			sessionLookup_req, sessionUpdate_req, listenPortReq, rxDataReq, openConnReq, closeConnReq, txDataReqMeta, txDataReq,
+			listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp, 0, 0, 0x01010101, regSessionCount);
+#endif
+		// cerr << "[TB] After toe()" << endl;
 
 		//TODO use actual iperf
 		convertStreamWidth<DATA_WIDTH, 22>(rxDataRsp, rxDataRsp64);
 		iperf(listenPortReq, listenPortRsp, notification, rxDataReq,
 			  rxDataRspMeta, rxDataRsp64, rxDataOut, openConnReq, openConnRsp,
 			  closeConnReq, txSessionIDs);
+		// cerr << "[TB] After iperf()" << endl;
 
 		simulateRx<DATA_WIDTH>(&rxMemory, rxBufferWriteCmd, rxBufferWriteStatus, rxBufferReadCmd, rxBufferWriteData, rxBufferReadData);
 		simulateTx<DATA_WIDTH>(&txMemory, txBufferWriteCmd, txBufferWriteStatus, txBufferReadCmd, txBufferWriteData, txBufferReadData);
@@ -845,7 +969,7 @@ int main(int argc, char *argv[]) {
 				parseOutputPacket(outputPacketizer, sessionList, inputPacketizer);	// then parse it.
 				txWordCounter = 0;
 				txPacketCounter++;
-				//cerr << dec << txPacketCounter << ", " << endl << hex;
+				cerr << dec << txPacketCounter << ", " << endl << hex;
 			}
 			else
 				txWordCounter++;
@@ -862,8 +986,24 @@ int main(int argc, char *argv[]) {
 					dataOutput.replace(i*2,2,"00");
 				}
 			}
-			if (rxDataOut_Data.last == 1)
+
+			// Collect received data for End-to-End verification
+			for (int i = 0; i < 8; i++) {
+				if (rxDataOut_Data.keep[i]) {
+					currentReceivedPayload.data.push_back((uint8_t)(rxDataOut_Data.data((i*8)+7, i*8)));
+				}
+			}
+
+			if (rxDataOut_Data.last == 1) {
 				rxPayloadCounter++;
+				// Save completed payload
+				if (currentReceivedPayload.data.size() > 0) {
+					receivedPayloads.push_back(currentReceivedPayload);
+					cerr << "[rxDataOut] Received payload " << receivedPayloads.size() - 1
+					     << ": " << currentReceivedPayload.data.size() << " bytes" << endl;
+				}
+				currentReceivedPayload.data.clear();
+			}
 			rxOutput << dataOutput << " " << rxDataOut_Data.last << " " << keepOutput << endl;
 		}
 		if (!txDataRsp.empty()) {
@@ -872,7 +1012,7 @@ int main(int argc, char *argv[]) {
 				cerr << endl << "Warning: Attempt to write data into the Tx App I/F of the TOE was unsuccesfull. Returned error code: " << tempResp.error << endl;
 		}
 		simCycleCounter++;
-		//cout << dec << simCycleCounter << endl;
+		// cout << dec << simCycleCounter << endl;
 		//cerr << simCycleCounter << " - Number of Sessions opened: " <<  dec << regSessionCount << endl << "Number of Sessions closed: " << relSessionCount << endl;
 	} while (simCycleCounter < totalSimCycles);
 //	while (!ipTxData.empty() || !ipRxData.empty() || !rxDataOut.empty());
@@ -880,6 +1020,214 @@ int main(int argc, char *argv[]) {
 		mmCmd tempMemCmd = txBufferWriteCmd.read();
 		std::cerr <<  "Left-over Cmd: " << std::hex << tempMemCmd.saddr << " - " << tempMemCmd.bbt << std::endl;
 	}*/
+
+	// === DDR Memory Verification ===
+	// Compare INPUT FILE TCP payloads with what's stored in dummyMemory
+	std::cerr << "\n=== DDR Memory Verification (Input File vs dummyMemory) ===" << std::endl;
+	std::cerr << "Expected payloads from input file: " << expectedPayloads.size() << std::endl;
+	std::cerr << "DDR write records: " << ddrWriteRecords.size() << std::endl;
+
+	int passCount = 0;
+	int failCount = 0;
+
+	// Match expected payloads with DDR write records
+	// Handle wrap-around splits: one input packet may become two DDR writes
+	size_t i = 0;  // index for expectedPayloads
+	size_t j = 0;  // index for ddrWriteRecords
+
+	while (i < expectedPayloads.size() && j < ddrWriteRecords.size()) {
+		ExpectedPayload& expected = expectedPayloads[i];
+		DdrWriteRecord& rec = ddrWriteRecords[j];
+
+		// Check for wrap-around split: 3 conditions must be met
+		bool isWrapSplit = false;
+		if (j + 1 < ddrWriteRecords.size()) {
+			DdrWriteRecord& nextRec = ddrWriteRecords[j + 1];
+			isWrapSplit =
+				(rec.addr + rec.length == BUFFER_SIZE) &&           // First ends exactly at buffer end
+				(nextRec.addr == 0) &&                               // Second starts exactly at 0
+				(rec.length + nextRec.length == expected.data.size()); // Combined length matches expected
+		}
+
+		std::cerr << "\n--- Verification " << i << " (Packet " << expected.packetIndex << ") ---" << std::endl;
+
+		if (isWrapSplit) {
+			DdrWriteRecord& nextRec = ddrWriteRecords[j + 1];
+			std::cerr << "[WRAP-AROUND SPLIT DETECTED]" << std::endl;
+			std::cerr << "Part 1: SessionID=0x" << std::hex << (uint16_t)rec.sessionId
+			          << ", Addr=0x" << (uint32_t)rec.addr
+			          << ", Len=" << std::dec << rec.length << std::endl;
+			std::cerr << "Part 2: SessionID=0x" << std::hex << (uint16_t)nextRec.sessionId
+			          << ", Addr=0x" << (uint32_t)nextRec.addr
+			          << ", Len=" << std::dec << nextRec.length << std::endl;
+			std::cerr << "Combined Length: " << (rec.length + nextRec.length) << " bytes" << std::endl;
+			std::cerr << "Input File Payload Length: " << expected.data.size() << " bytes" << std::endl;
+
+			// Verify first part
+			bool match1 = rxMemory.verifyData(rec.sessionId, rec.addr,
+			                                   expected.data.data(), rec.length);
+			// Verify second part
+			bool match2 = rxMemory.verifyData(nextRec.sessionId, nextRec.addr,
+			                                   expected.data.data() + rec.length, nextRec.length);
+
+			if (match1 && match2) {
+				std::cerr << "Result: PASS - Wrap-around split data matches" << std::endl;
+				passCount++;
+			} else {
+				std::cerr << "Result: FAIL - Wrap-around split data mismatch (part1="
+				          << match1 << ", part2=" << match2 << ")" << std::endl;
+				failCount++;
+			}
+
+			j += 2;  // Consume both DDR records
+		} else {
+			// Normal case: one-to-one matching
+			std::cerr << "SessionID: 0x" << std::hex << (uint16_t)rec.sessionId
+			          << ", DDR Addr: 0x" << (uint32_t)rec.addr << std::dec << std::endl;
+			std::cerr << "Input File Payload Length: " << expected.data.size() << " bytes" << std::endl;
+			std::cerr << "DDR Write Length: " << rec.length << " bytes" << std::endl;
+
+			// Print expected data from input file
+			std::cerr << "Input File Data: ";
+			for (size_t k = 0; k < expected.data.size() && k < 32; k++) {
+				std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)expected.data[k] << " ";
+			}
+			if (expected.data.size() > 32) std::cerr << "...";
+			std::cerr << std::endl;
+
+			// Print what's in dummyMemory at that address
+			std::cerr << "dummyMemory Data: ";
+			rxMemory.dumpBuffer(rec.sessionId, rec.addr, std::min((size_t)32, expected.data.size()));
+
+			// Verify: Compare INPUT FILE data with dummyMemory
+			bool match = true;
+			size_t compareLen = std::min(expected.data.size(), (size_t)rec.length);
+
+			if (expected.data.size() != (size_t)rec.length) {
+				std::cerr << "WARNING: Length mismatch! Input=" << std::hex << expected.data.size()
+				          << ", DDR=" << rec.length << std::dec << std::endl;
+			}
+
+			// Do byte-by-byte comparison
+			if (compareLen > 0) {
+				match = rxMemory.verifyData(rec.sessionId, rec.addr, expected.data.data(), compareLen);
+			}
+
+			if (match && expected.data.size() == (size_t)rec.length) {
+				std::cerr << "Result: PASS - Input file TCP payload matches dummyMemory" << std::endl;
+				passCount++;
+			} else {
+				std::cerr << "Result: FAIL - Data mismatch between input file and dummyMemory" << std::endl;
+				failCount++;
+			}
+
+			j += 1;  // Consume one DDR record
+		}
+
+		i++;  // Move to next expected payload
+	}
+
+	// Report any unmatched records
+	if (i < expectedPayloads.size()) {
+		std::cerr << "\nWARNING: " << (expectedPayloads.size() - i)
+		          << " input packets had no matching DDR write!" << std::endl;
+		failCount += (expectedPayloads.size() - i);
+	}
+	if (j < ddrWriteRecords.size()) {
+		std::cerr << "\nINFO: " << (ddrWriteRecords.size() - j)
+		          << " extra DDR writes (possibly retransmits or ACKs)" << std::endl;
+	}
+
+	std::cerr << "\n=== DDR Verification Summary ===" << std::endl;
+	std::cerr << "Verified: " << i << ", Pass: " << passCount << ", Fail: " << failCount << std::endl;
+	if (failCount == 0 && passCount > 0) {
+		std::cerr << "SUCCESS: All input file TCP payloads correctly written to dummyMemory!" << std::endl;
+	}
+	std::cerr << "=== End DDR Verification ===\n" << std::endl;
+
+	// === End-to-End Verification: Input File vs rxDataOut ===
+	std::cerr << "\n=== End-to-End Verification (Input File vs rxDataOut) ===" << std::endl;
+	std::cerr << "Expected payloads from input file: " << expectedPayloads.size() << std::endl;
+	std::cerr << "Received payloads from rxDataOut: " << receivedPayloads.size() << std::endl;
+
+	int e2ePassCount = 0;
+	int e2eFailCount = 0;
+
+	size_t e2eMinRecords = std::min(expectedPayloads.size(), receivedPayloads.size());
+
+	for (size_t i = 0; i < e2eMinRecords; i++) {
+		ExpectedPayload& expected = expectedPayloads[i];
+		ReceivedPayload& received = receivedPayloads[i];
+
+		std::cerr << "\n--- E2E Verification " << i << " (Packet " << expected.packetIndex << ") ---" << std::endl;
+		std::cerr << "Input File Payload: " << expected.data.size() << " bytes" << std::endl;
+		std::cerr << "rxDataOut Payload: " << received.data.size() << " bytes" << std::endl;
+
+		// Print expected data from input file
+		std::cerr << "Input File Data:  ";
+		for (size_t j = 0; j < expected.data.size() && j < 32; j++) {
+			std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)expected.data[j] << " ";
+		}
+		if (expected.data.size() > 32) std::cerr << "...";
+		std::cerr << std::endl;
+
+		// Print received data from rxDataOut
+		std::cerr << "rxDataOut Data:   ";
+		for (size_t j = 0; j < received.data.size() && j < 32; j++) {
+			std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)received.data[j] << " ";
+		}
+		if (received.data.size() > 32) std::cerr << "...";
+		std::cerr << std::endl;
+
+		// Compare
+		bool match = true;
+		if (expected.data.size() != received.data.size()) {
+			std::cerr << "MISMATCH: Length differs! Expected=" << std::dec << expected.data.size()
+			          << ", Received=" << received.data.size() << std::endl;
+			match = false;
+		} else {
+			for (size_t j = 0; j < expected.data.size(); j++) {
+				if (expected.data[j] != received.data[j]) {
+					std::cerr << "MISMATCH at byte " << std::dec << j
+					          << ": Expected=0x" << std::hex << (int)expected.data[j]
+					          << ", Received=0x" << (int)received.data[j] << std::endl;
+					match = false;
+					break;
+				}
+			}
+		}
+
+		if (match) {
+			std::cerr << "Result: PASS - Input file payload == rxDataOut" << std::dec << std::endl;
+			e2ePassCount++;
+		} else {
+			std::cerr << "Result: FAIL - Data mismatch!" << std::dec << std::endl;
+			e2eFailCount++;
+		}
+	}
+
+	// Report unmatched
+	if (expectedPayloads.size() > receivedPayloads.size()) {
+		std::cerr << "\nWARNING: " << (expectedPayloads.size() - receivedPayloads.size())
+		          << " input payloads were NOT received in rxDataOut!" << std::endl;
+		e2eFailCount += (expectedPayloads.size() - receivedPayloads.size());
+	}
+	if (receivedPayloads.size() > expectedPayloads.size()) {
+		std::cerr << "\nINFO: " << (receivedPayloads.size() - expectedPayloads.size())
+		          << " extra payloads received (possibly from ACKs/retransmits)" << std::endl;
+	}
+
+	std::cerr << "\n=== End-to-End Verification Summary ===" << std::endl;
+	std::cerr << "Verified: " << e2eMinRecords << ", Pass: " << e2ePassCount << ", Fail: " << e2eFailCount << std::endl;
+	if (e2eFailCount == 0 && e2ePassCount > 0) {
+		std::cerr << "SUCCESS: All input file TCP payloads correctly received at application!" << std::endl;
+	} else if (e2eFailCount > 0) {
+		std::cerr << "FAILURE: Data corruption detected in DDR path!" << std::endl;
+	} else if (e2ePassCount == 0 && expectedPayloads.size() > 0) {
+		std::cerr << "FAILURE: No data received at application (rxDataOut empty)!" << std::endl;
+	}
+	std::cerr << "=== End End-to-End Verification ===\n" << std::endl;
+
 	// Compare the results file with the golden results
 	// only RX Gold supported for now
 	float rxDividedPacketCounter = static_cast <float>(rxPayloadCounter) / 2;
