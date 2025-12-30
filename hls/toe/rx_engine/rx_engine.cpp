@@ -517,6 +517,10 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 	static tcpOptionalHeader<WIDTH> optionalHeader;
 	static bool parseHeader = false;
 	static bool headerWritten = false;
+	// Debug counters
+	static uint32_t dropOptPktNum = 0;
+	static uint32_t dropOptWordsIn = 0;
+	static uint32_t dropOptWordsOut = 0;
 
 	switch (state)
 	{
@@ -526,17 +530,20 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 			optionalHeader.clear();
 			optionalFieldsMeta meta =  metaIn.read();
 			net_axis<WIDTH> currWord = dataIn.read();
+			dropOptWordsIn++;
 			dataOffset = meta.dataOffset;// - 5;
-			// std::cout << "OFFSET: " << dataOffset << std::endl;
-			// std::cout << "DROP OO: ";
-			// printLE(std::cout, currWord);
-			// std::cout << std::endl;
+			std::cerr << "[dropOptHdr] Pkt " << dropOptPktNum << " START dataOffset=" << (int)dataOffset << std::endl;
+			std::cout << "OFFSET: " << dataOffset << std::endl;
+			std::cout << "DROP OO: ";
+			printLE(std::cout, currWord);
+			std::cout << std::endl;
 
 			optionalHeader.parseWord(currWord.data);
 			parseHeader = false;
 			if (dataOffset == 0)
 			{
 				dataOut.write(currWord);
+				dropOptWordsOut++;
 			}
 			else
 			{
@@ -572,6 +579,7 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 		if (!dataIn.empty())
 		{
 			net_axis<WIDTH> currWord = dataIn.read();
+			dropOptWordsIn++;
 			net_axis<WIDTH> sendWord;
 			sendWord.last = 0;
 
@@ -591,6 +599,7 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 			{
 				sendWord = currWord;
 				dataOut.write(sendWord);
+				dropOptWordsOut++;
 			}
 			else //if (dataOffset == 1)
 			{
@@ -600,11 +609,17 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 				sendWord.keep(WIDTH/8-1, (WIDTH/8) - (dataOffset*4)) = currWord.keep(dataOffset*4-1, 0);
 				sendWord.last = (currWord.keep[dataOffset*4] == 0);
 				dataOut.write(sendWord);
+				dropOptWordsOut++;
 			}
 
 			prevWord = currWord;
 			if (currWord.last)
 			{
+				std::cerr << "[dropOptHdr] Pkt " << dropOptPktNum << " END wordsIn=" << dropOptWordsIn
+				          << " wordsOut=" << dropOptWordsOut << std::endl;
+				dropOptPktNum++;
+				dropOptWordsIn = 0;
+				dropOptWordsOut = 0;
 				state = 0;
 				if (currWord.keep[dataOffset*4] != 0 && dataOffset != 0)
 				{
@@ -622,6 +637,12 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 		sendWord.keep(WIDTH/8-1, (WIDTH/8) - (dataOffset*4)) = 0;
 		sendWord.last = 1;
 		dataOut.write(sendWord);
+		dropOptWordsOut++;
+		std::cerr << "[dropOptHdr] Pkt " << dropOptPktNum << " END(residue) wordsIn=" << dropOptWordsIn
+		          << " wordsOut=" << dropOptWordsOut << std::endl;
+		dropOptPktNum++;
+		dropOptWordsIn = 0;
+		dropOptWordsOut = 0;
 		state = 0;
 		break;
 	}
@@ -1611,6 +1632,7 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 
 	enum tpfStateType {READ_DROP1, READ_DROP2, FWD, DROP};
 	static tpfStateType tpf_state = READ_DROP1;
+	static uint32_t pktDropperPktNum = 0;
 
 	bool drop;
 
@@ -1621,6 +1643,7 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 			dropFifoIn1.read(drop);
 			if (drop)
 			{
+				std::cerr << "[rxPackageDropper] Pkt " << pktDropperPktNum << " DROP by metaHandler" << std::endl;
 				tpf_state = DROP;
 			}
 			else
@@ -1635,10 +1658,12 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 			dropFifoIn2.read(drop);
 			if (drop)
 			{
+				std::cerr << "[rxPackageDropper] Pkt " << pktDropperPktNum << " DROP by FSM" << std::endl;
 				tpf_state = DROP;
 			}
 			else
 			{
+				std::cerr << "[rxPackageDropper] Pkt " << pktDropperPktNum << " FWD" << std::endl;
 				tpf_state = FWD;
 			}
 		}
@@ -1649,6 +1674,7 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 			net_axis<WIDTH> currWord = dataIn.read();
 			if (currWord.last)
 			{
+				pktDropperPktNum++;
 				tpf_state = READ_DROP1;
 			}
 			rxBufferDataOut.write(currWord);
@@ -1660,6 +1686,7 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 			net_axis<WIDTH> currWord = dataIn.read();
 			if (currWord.last)
 			{
+				pktDropperPktNum++;
 				tpf_state = READ_DROP1;
 			}
 		}
@@ -1770,6 +1797,8 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 	static ap_uint<WINDOW_BITS> lengthFirstPkg;
 	static ap_uint<8> offset = 0;
 	static net_axis<WIDTH> prevWord;
+	static uint32_t rxMemWrPktNum = 0;
+	static uint32_t rxMemWrWordsOut = 0;
 
 
 	switch (rxMemWrState)
@@ -1784,7 +1813,12 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 	case IDLE_REG:
 		if ((cmd.saddr(WINDOW_BITS-1, 0) + cmd.bbt) > BUFFER_SIZE)
 		{
-			lengthFirstPkg = BUFFER_SIZE - cmd.saddr;
+			// lengthFirstPkg = BUFFER_SIZE - cmd.saddr;
+			lengthFirstPkg = BUFFER_SIZE - cmd.saddr(WINDOW_BITS-1, 0);
+			std::cout << "[rxEngMemWrite WRAP] cmd.saddr=0x" << std::hex << (uint32_t)cmd.saddr
+			          << " cmd.bbt=" << std::dec << (uint32_t)cmd.bbt
+			          << " BUFFER_SIZE=" << BUFFER_SIZE
+			          << " lengthFirstPkg=" << (uint32_t)lengthFirstPkg << std::endl;
 			remainingLength = lengthFirstPkg;
 			offset = lengthFirstPkg(DATA_KEEP_BITS - 1, 0);
 
@@ -1843,12 +1877,16 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 		if (!dataIn.empty())
 		{
 			net_axis<WIDTH> currWord = dataIn.read();
-         // std::cout << "HELP: ";
-         // printLE(std::cout, currWord);
-         // std::cout << std::endl;
+        //  std::cout << "HELP: ";
+        //  printLE(std::cout, currWord);
+        //  std::cout << std::endl;
 			dataOut.write(currWord);
+			rxMemWrWordsOut++;
 			if (currWord.last)
 			{
+				std::cerr << "[rxEngMemWrite] Pkt " << rxMemWrPktNum << " FWD_ALIGNED wordsOut=" << std::hex << rxMemWrWordsOut << std::dec << std::endl;
+				rxMemWrPktNum++;
+				rxMemWrWordsOut = 0;
 				rxMemWrState = IDLE;
 			}
 		}
@@ -1962,7 +2000,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	static stream<net_axis<WIDTH> >		rxEng_dataBuffer3b("rxEng_dataBuffer3b");
 	#pragma HLS stream variable=rxEng_dataBuffer0 depth=8
 	#pragma HLS stream variable=rxEng_dataBuffer1 depth=8
-	#pragma HLS stream variable=rxEng_dataBuffer2 depth=256 //critical, tcp checksum computation
+	#pragma HLS stream variable=rxEng_dataBuffer2 depth=512 //critical, tcp checksum computation
 	#pragma HLS stream variable=rxEng_dataBuffer3 depth=32
 	#pragma HLS stream variable=rxEng_dataBuffer3a depth=8
 	#pragma HLS stream variable=rxEng_dataBuffer3b depth=8
