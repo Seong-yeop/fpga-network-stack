@@ -30,6 +30,8 @@
 
 #include "toe.hpp"
 #include <map>
+#include <vector>
+#include <iomanip>
 
 template <int WIDTH>
 class dummyMemory {
@@ -38,16 +40,24 @@ public:
 	void setWriteCmd(mmCmd cmd);
 	void readWord(net_axis<WIDTH>& word);
 	void writeWord(net_axis<WIDTH>& word);
+	// Verification methods
+	void dumpBuffer(ap_uint<16> sessionId, uint32_t startAddr, uint32_t length);
+	bool verifyData(ap_uint<16> sessionId, uint32_t startAddr, const uint8_t* expectedData, uint32_t length);
+	std::vector<ap_uint<16>> getSessionIds();
 private:
 	std::map<ap_uint<16>, ap_uint<8>*>::iterator createBuffer(ap_uint<16> id);
 	//void shuffleWord(ap_uint<64>& );
 	//bool* getBitMask(ap_uint<4> keep);
-	ap_uint<16> readAddr; //<8>
+	ap_uint<WINDOW_BITS> readAddr; // Extended for WINDOW_SCALE support
 	ap_uint<16> readId;
 	int readLen;
-	ap_uint<16> writeAddr; //<8>
+	ap_uint<WINDOW_BITS> writeAddr; // Extended for WINDOW_SCALE support
 	ap_uint<16> writeId;
-	ap_uint<16> writeLen;
+	ap_uint<WINDOW_BITS> writeLen;
+	// Debug tracking for write commands
+	ap_uint<WINDOW_BITS> writeCmdStartAddr;
+	ap_uint<WINDOW_BITS> writeCmdLen;
+	ap_uint<WINDOW_BITS> writeCmdBytesWritten;
 	std::map<ap_uint<16>, ap_uint<8>*> storage;
 	std::map<ap_uint<16>, ap_uint<8>*>::iterator readStorageIt;
 	std::map<ap_uint<16>, ap_uint<8>*>::iterator writeStorageIt;
@@ -56,23 +66,31 @@ private:
 template <int WIDTH>
 void dummyMemory<WIDTH>::setReadCmd(mmCmd cmd)
 {
-//	readAddr = cmd.saddr(7, 0);
-	readAddr = cmd.saddr(15, 0);
-	readId = cmd.saddr(31, 16);
-	uint16_t tempLen = (uint16_t) cmd.bbt(15, 0);
+	// Address format from rx_engine.cpp:
+	// pkgAddr[31:30] = 0, pkgAddr[29:WINDOW_BITS] = sessionID, pkgAddr[WINDOW_BITS-1:0] = offset
+	readAddr = cmd.saddr(WINDOW_BITS-1, 0);
+	readId = cmd.saddr(29, WINDOW_BITS);
+	uint32_t tempLen = (uint32_t) cmd.bbt;
 	readLen = (int) tempLen;
-	//std::cout << readLen << std::endl;
+	//std::cout << "READ command: sessionID=" << std::hex << readId << " addr=" << readAddr << " len=" << std::dec << readLen << std::endl;
 }
 
 template <int WIDTH>
 void dummyMemory<WIDTH>::setWriteCmd(mmCmd cmd)
 {
-//	writeAddr = cmd.saddr(7, 0);
-	writeAddr = cmd.saddr(15, 0);
-	writeId = cmd.saddr(31, 16);
-	uint16_t tempLen = (uint16_t) cmd.bbt(15, 0);
+	// Address format from rx_engine.cpp:
+	// pkgAddr[31:30] = 0, pkgAddr[29:WINDOW_BITS] = sessionID, pkgAddr[WINDOW_BITS-1:0] = offset
+	writeAddr = cmd.saddr(WINDOW_BITS-1, 0);
+	writeId = cmd.saddr(29, WINDOW_BITS);
+	uint32_t tempLen = (uint32_t) cmd.bbt;
 	writeLen = (int) tempLen;
-	//std::cout << "WRITE command: " << std::hex << cmd.saddr(15, 0) << " " << std::dec << cmd.bbt << std::endl;
+	writeCmdStartAddr = writeAddr;
+	writeCmdLen = writeLen;
+	writeCmdBytesWritten = 0;
+	std::cerr << "[DDR setWriteCmd] sessionID=0x" << std::hex << (uint16_t)writeId
+	          << " addr=0x" << (uint32_t)writeAddr
+	          << " len=" << std::dec << (uint32_t)writeLen
+	          << " (cmd.bbt=" << (uint32_t)cmd.bbt << ")" << std::endl;
 }
 
 template <int WIDTH>
@@ -112,9 +130,9 @@ void dummyMemory<WIDTH>::writeWord(net_axis<WIDTH>& word)
 	if (writeStorageIt == storage.end())
 	{
 		writeStorageIt = createBuffer(writeId);
-		// check it?
 	}
 	//shuffleWord(word.data);
+	int bytesThisWord = 0;
 	for (int i = 0; i < (WIDTH/8); i++)
 	{
 		if (word.keep[i])
@@ -122,6 +140,8 @@ void dummyMemory<WIDTH>::writeWord(net_axis<WIDTH>& word)
 			(writeStorageIt->second)[writeAddr] = word.data((i*8)+7, i*8);
 			writeAddr++;
 			writeLen--;
+			bytesThisWord++;
+			writeCmdBytesWritten++;
 		}
 		else
 		{
@@ -130,6 +150,15 @@ void dummyMemory<WIDTH>::writeWord(net_axis<WIDTH>& word)
 	}
 	if (word.last)
 	{
+		if (writeLen != 0) {
+			std::cerr << "[DDR ERROR] writeLen=" << std::dec << (uint32_t)writeLen
+			          << " when word.last=1, writeId=0x" << std::hex << (uint16_t)writeId
+			          << ", writeAddr=0x" << (uint32_t)writeAddr
+			          << ", startAddr=0x" << (uint32_t)writeCmdStartAddr
+			          << ", cmdLen=" << std::dec << (uint32_t)writeCmdLen
+			          << ", totalBytesWritten=" << (uint32_t)writeCmdBytesWritten
+			          << ", bytesThisWord=" << bytesThisWord << std::endl;
+		}
 		assert(writeLen == 0);
 	}
 }
@@ -137,7 +166,7 @@ void dummyMemory<WIDTH>::writeWord(net_axis<WIDTH>& word)
 template <int WIDTH>
 std::map<ap_uint<16>, ap_uint<8>*>::iterator dummyMemory<WIDTH>::createBuffer(ap_uint<16> id)
 {
-	ap_uint<8>* array = new ap_uint<8>[65536]; // [255] default
+	ap_uint<8>* array = new ap_uint<8>[BUFFER_SIZE]; // Match TOE BUFFER_SIZE (256KB with WINDOW_SCALE)
 	std::pair<std::map<ap_uint<16>, ap_uint<8>*>::iterator, bool> ret;
 	ret = storage.insert(std::make_pair(id, array));
 	if (ret.second)
@@ -145,6 +174,58 @@ std::map<ap_uint<16>, ap_uint<8>*>::iterator dummyMemory<WIDTH>::createBuffer(ap
 		return ret.first;
 	}
 	return storage.end();
+}
+
+// Dump buffer contents for debugging
+template <int WIDTH>
+void dummyMemory<WIDTH>::dumpBuffer(ap_uint<16> sessionId, uint32_t startAddr, uint32_t length)
+{
+	auto it = storage.find(sessionId);
+	if (it == storage.end()) {
+		std::cerr << "[DDR Verify] Session 0x" << std::hex << sessionId << " not found" << std::endl;
+		return;
+	}
+	std::cerr << "[DDR Verify] Session 0x" << std::hex << (uint16_t)sessionId
+	          << " data at addr 0x" << startAddr << ", len=" << std::dec << length << ":" << std::endl;
+	for (uint32_t i = 0; i < length; i++) {
+		std::cerr << std::hex << std::setw(2) << std::setfill('0')
+		          << (int)(uint8_t)(it->second)[startAddr + i] << " ";
+		if ((i + 1) % 16 == 0) std::cerr << std::endl;
+	}
+	if (length % 16 != 0) std::cerr << std::endl;
+}
+
+// Verify data against expected values
+template <int WIDTH>
+bool dummyMemory<WIDTH>::verifyData(ap_uint<16> sessionId, uint32_t startAddr,
+                                     const uint8_t* expectedData, uint32_t length)
+{
+	auto it = storage.find(sessionId);
+	if (it == storage.end()) {
+		std::cerr << "[DDR Verify] Session 0x" << std::hex << sessionId << " not found" << std::endl;
+		return false;
+	}
+	for (uint32_t i = 0; i < length; i++) {
+		uint8_t actual = (uint8_t)(it->second)[startAddr + i];
+		if (actual != expectedData[i]) {
+			std::cerr << "[DDR Verify] Mismatch at offset " << std::dec << i
+			          << ": expected 0x" << std::hex << (int)expectedData[i]
+			          << ", got 0x" << (int)actual << std::endl;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Get list of session IDs in storage
+template <int WIDTH>
+std::vector<ap_uint<16>> dummyMemory<WIDTH>::getSessionIds()
+{
+	std::vector<ap_uint<16>> ids;
+	for (auto& pair : storage) {
+		ids.push_back(pair.first);
+	}
+	return ids;
 }
 
 #endif
