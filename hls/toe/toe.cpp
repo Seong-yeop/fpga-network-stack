@@ -132,22 +132,31 @@ void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outpu
 		if (!inputMemAccess.empty())
  		{
 			rxAppTempCmd = inputMemAccess.read();
-			if ((rxAppTempCmd.saddr.range(15, 0) + rxAppTempCmd.bbt) > 65536) {
-				rxAppAccLength = 65536 - rxAppTempCmd.saddr;
+			if ((rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0) + rxAppTempCmd.bbt) > BUFFER_SIZE) {
+				rxAppAccLength = BUFFER_SIZE - rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0);
 				outputMemAccess.write(mmCmd(rxAppTempCmd.saddr, rxAppAccLength));
 				rxAppBreakdown = true;
+				std::cerr << "[rxAppMemAccess WRAP] addr=0x" << std::hex << (uint32_t)rxAppTempCmd.saddr
+				          << " len=" << std::dec << (uint32_t)rxAppTempCmd.bbt
+				          << " firstPart=" << (uint32_t)rxAppAccLength << std::endl;
 			}
-			else
+			else {
 				outputMemAccess.write(rxAppTempCmd);
-			//std::cerr << "Mem.Cmd: " << std::hex << rxAppTempCmd.saddr << " - " << rxAppTempCmd.bbt << std::endl;
+				std::cerr << "[rxAppMemAccess NORMAL] addr=0x" << std::hex << (uint32_t)rxAppTempCmd.saddr
+				          << " len=" << std::dec << (uint32_t)rxAppTempCmd.bbt
+				          << " -> doubleAccess=0" << std::endl;
+			}
 			rxAppDoubleAccess.write(rxAppBreakdown);
+			std::cerr << "[rxAppDoubleAccess WRITE] value=" << (int)rxAppBreakdown << std::endl;
 		}
 	}
 	else if (rxAppBreakdown == true) {
-		rxAppTempCmd.saddr.range(15, 0) = 0;
+		rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0) = 0;
 		rxAppAccLength = rxAppTempCmd.bbt - rxAppAccLength;
 		outputMemAccess.write(mmCmd(rxAppTempCmd.saddr, rxAppAccLength));
-		//std::cerr << "Mem.Cmd: " << std::hex << rxAppTempCmd.saddr << " - " << rxAppTempCmd.bbt - (65536 - rxAppTempCmd.saddr) << std::endl;
+		std::cerr << "[rxAppMemAccess WRAP2] addr=0x" << std::hex << (uint32_t)rxAppTempCmd.saddr
+		          << " secondPart=" << std::dec << (uint32_t)rxAppAccLength
+		          << " (NO doubleAccess written)" << std::endl;
 		rxAppBreakdown = false;
 	}
 }
@@ -174,8 +183,12 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 		{
 			//rxAppMemRdOffset = 0;
 			rxAppDoubleAccessFlag = rxAppDoubleAccess.read();
+			std::cerr << "[rxAppDoubleAccess READ] value=" << (int)rxAppDoubleAccessFlag << std::endl;
 			rxBufferReadData.read(rxAppMemRdRxWord);
 			rxAppMemRdOffset = keepToLen(rxAppMemRdRxWord.keep);						// Count the number of valid bytes in this data word
+			std::cerr << "[rxAppMemDataRead IDLE] doubleAccess=" << (int)rxAppDoubleAccessFlag
+			          << " dataLast=" << (int)rxAppMemRdRxWord.last
+			          << " keepLen=" << (int)rxAppMemRdOffset << std::endl;
 			if (rxAppMemRdRxWord.last == 1 && rxAppDoubleAccessFlag == 1) {		// If this is the last word and this access was broken down
 				rxAppMemRdRxWord.last = ~rxAppDoubleAccessFlag;					// Negate the last flag inn the axiWord and determine if there's an offset
 				if (rxAppMemRdOffset == (WIDTH/8)) // No need to offset anything
@@ -194,12 +207,12 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 			}
 			else if (rxAppMemRdRxWord.last == 1 && rxAppDoubleAccessFlag == 0)	{ // If this is the 1st and last data word of this segment and no mem. access breakdown occured,
 				rxDataRsp.write(rxAppMemRdRxWord);								// then output the data word and stay in this state to read the next segment data
-				//std::cerr << "Mem.Data: " << std::hex << rxAppMemRdRxWord.data << " - " << rxAppMemRdRxWord.keep << " - " << rxAppMemRdRxWord.last << std::endl;
+				std::cerr << "[rxAppMemDataRead IDLE] single-word packet, output last=1" << std::endl;
 			}
 			else {																// Finally if there are more words in this memory access,
 				rxAppState = RXAPP_STREAM;										// then go to RXAPP_STREAM to read them
 				rxDataRsp.write(rxAppMemRdRxWord);								// and output the current word
-				//std::cerr << "Mem.Data: " << std::hex << rxAppMemRdRxWord.data << " - " << rxAppMemRdRxWord.keep << " - " << rxAppMemRdRxWord.last << std::endl;
+				std::cerr << "[rxAppMemDataRead IDLE->STREAM]" << std::endl;
 			}
 
 		}
@@ -214,16 +227,17 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 				rxAppMemRdRxWord.last = ~rxAppDoubleAccessFlag;					// Negate the last flag inn the axiWord and determine if there's an offset
 				if (rxAppMemRdOffset == (WIDTH/8)) {									// No need to offset anything
 					rxDataRsp.write(rxAppMemRdRxWord);							// Output the word directly
-					//std::cerr << "Mem.Data: " << std::hex << rxAppMemRdRxWord.data << " - " << rxAppMemRdRxWord.keep << " - " << rxAppMemRdRxWord.last << std::endl;
+					std::cerr << "[rxAppMemDataRead STREAM] wrap full word -> STREAMUNMERGED" << std::endl;
 					rxAppState = RXAPP_STREAMUNMERGED;							// Jump to stream merged since there's no joining to be performed.
 				}
 				else if (rxAppMemRdOffset < (WIDTH/8)) {								// If this data word is not full
+					std::cerr << "[rxAppMemDataRead STREAM] wrap partial word (" << (int)rxAppMemRdOffset << " bytes) -> JOIN" << std::endl;
 					rxAppState = RXAPP_JOIN;									// Don't output anything and go to RXAPP_JOIN to fetch more data to fill in the data word
 				}
 			}
 			else if (rxAppMemRdRxWord.last == 1 && rxAppDoubleAccessFlag == 0) {// If this is the 1st and last data word of this segment and no mem. access breakdown occured,
 				rxDataRsp.write(rxAppMemRdRxWord);								// then output the data word and stay in this state to read the next segment data
-				//std::cerr << "Mem.Data: " << std::hex << rxAppMemRdRxWord.data << " - " << rxAppMemRdRxWord.keep << " - " << rxAppMemRdRxWord.last << std::endl;
+				std::cerr << "[rxAppMemDataRead STREAM->IDLE] output last=1" << std::endl;
 				rxAppState = RXAPP_IDLE;										// and go back to the idle state
 			}
 			else {																// If the segment data hasn't finished yet
@@ -252,7 +266,7 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 
 			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range((rxAppMemRdOffset * 8) - 1, 0);	// In any case, insert the data of the new data word in the old one. Here we don't pay attention to the exact number of bytes in the new data word. In case they don't fill the entire remaining gap, there will be garbage in the output but it doesn't matter since the KEEP signal indicates which bytes are valid.
 			rxAppMemRdRxWord = rxBufferReadData.read();
-			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range(((8 - rxAppMemRdOffset) * 8) - 1, 0);				// Buffer & realign temp into rxAppmemRdRxWord (which is a static variable)
+			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range((((WIDTH/8) - rxAppMemRdOffset) * 8) - 1, 0);				// Buffer & realign temp into rxAppmemRdRxWord (which is a static variable)
 			ap_uint<8> tempCounter = keepToLen(rxAppMemRdRxWord.keep);					// Determine how any bytes are valid in the new data word. It might be that this is the only data word of the 2nd segment
 			rxAppOffsetBuffer = tempCounter - ((WIDTH/8) - rxAppMemRdOffset);				// Calculate the number of bytes to go into the next & final data word
 			if (rxAppMemRdRxWord.last == 1) {
@@ -278,9 +292,9 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 			temp.keep = ~uint64_t(0);
 			temp.last = 0;
 
-			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, ((8 - rxAppMemRdOffset) * 8));
+			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, (((WIDTH/8) - rxAppMemRdOffset) * 8));
 			rxAppMemRdRxWord = rxBufferReadData.read();							// Read the new data word in
-			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range(((8 - rxAppMemRdOffset) * 8) - 1, 0);
+			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range((((WIDTH/8) - rxAppMemRdOffset) * 8) - 1, 0);
 			ap_uint<8> tempCounter = keepToLen(rxAppMemRdRxWord.keep);			// Determine how any bytes are valid in the new data word. It might be that this is the only data word of the 2nd segment
 			rxAppOffsetBuffer = tempCounter - ((WIDTH/8) - rxAppMemRdOffset);				// Calculate the number of bytes to go into the next & final data word
 			if (rxAppMemRdRxWord.last == 1) {
@@ -303,7 +317,7 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 			temp.keep = lenToKeep(rxAppOffsetBuffer);
 			temp.last = 1;
 
-			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, ((8 - rxAppMemRdOffset) * 8));
+			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, (((WIDTH/8) - rxAppMemRdOffset) * 8));
 			rxDataRsp.write(temp);												// And finally write the data word to the output
 			//std::cerr << "Mem.Data: " << std::hex << temp.data << " - " << temp.keep << " - " << temp.last << std::endl;
 			rxAppState = RXAPP_IDLE;											// And go back to the idle stage
@@ -1028,6 +1042,84 @@ void toe(	// Data & Memory Interface
 					openConnRsp,
 					txDataRsp,
 #if (RX_DDR_BYPASS)
+					axis_data_count,
+					axis_max_data_count,
+#endif
+					myIpAddress,
+					regSessionCount);
+}
+
+// Simulation wrapper using net_axis types (for C simulation with testbench)
+void toe(	// Data & Memory Interface
+			stream<net_axis<DATA_WIDTH> >&				ipRxData,
+			stream<mmStatus>&							rxBufferWriteStatus,
+			stream<mmStatus>&							txBufferWriteStatus,
+			stream<net_axis<DATA_WIDTH> >&				rxBufferReadData,
+			stream<net_axis<DATA_WIDTH> >&				txBufferReadData,
+			stream<net_axis<DATA_WIDTH> >&				ipTxData,
+			stream<mmCmd>&								rxBufferWriteCmd,
+			stream<mmCmd>&								rxBufferReadCmd,
+			stream<mmCmd>&								txBufferWriteCmd,
+			stream<mmCmd>&								txBufferReadCmd,
+			stream<net_axis<DATA_WIDTH> >&				rxBufferWriteData,
+			stream<net_axis<DATA_WIDTH> >&				txBufferWriteData,
+			// SmartCam Interface
+			stream<rtlSessionLookupReply>&				sessionLookup_rsp,
+			stream<rtlSessionUpdateReply>&				sessionUpdate_rsp,
+			stream<rtlSessionLookupRequest>&			sessionLookup_req,
+			stream<rtlSessionUpdateRequest>&			sessionUpdate_req,
+			// Application Interface
+			stream<ap_uint<16> >&						listenPortReq,
+			stream<appReadRequest>&						rxDataReq,
+			stream<ipTuple>&							openConnReq,
+			stream<ap_uint<16> >&						closeConnReq,
+			stream<appTxMeta>&							txDataReqMeta,
+			stream<net_axis<DATA_WIDTH> >&				txDataReq,
+			stream<bool>&								listenPortRsp,
+			stream<appNotification>&					notification,
+			stream<ap_uint<16> >&						rxDataRspMeta,
+			stream<net_axis<DATA_WIDTH> >&				rxDataRsp,
+			stream<openStatus>&							openConnRsp,
+			stream<appTxRsp>&							txDataRsp,
+			//IP Address Input
+			ap_uint<32>									myIpAddress,
+			//statistic
+			ap_uint<16>&								regSessionCount)
+{
+	// Directly call toe_core with net_axis types (no conversion needed for simulation)
+	toe_core<DATA_WIDTH>(ipRxData,
+#if !(RX_DDR_BYPASS)
+					rxBufferWriteStatus,
+#endif
+					txBufferWriteStatus,
+					rxBufferReadData,
+					txBufferReadData,
+					ipTxData,
+#if !(RX_DDR_BYPASS)
+					rxBufferWriteCmd,
+					rxBufferReadCmd,
+#endif
+					txBufferWriteCmd,
+					txBufferReadCmd,
+					rxBufferWriteData,
+					txBufferWriteData,
+					sessionLookup_rsp,
+					sessionUpdate_rsp,
+					sessionLookup_req,
+					sessionUpdate_req,
+					listenPortReq,
+					rxDataReq,
+					openConnReq,
+					closeConnReq,
+					txDataReqMeta,
+					txDataReq,
+					listenPortRsp,
+					notification,
+					rxDataRspMeta,
+					rxDataRsp,
+					openConnRsp,
+					txDataRsp,
+#if RX_DDR_BYPASS
 					axis_data_count,
 					axis_max_data_count,
 #endif
