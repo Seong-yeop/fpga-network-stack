@@ -682,7 +682,13 @@ void toe_core(	// Data & Memory Interface
 					txEng2rxSar_req,
 					rxSar2rxEng_upd_rsp,
 					rxSar2rxApp_upd_rsp,
-					rxSar2txEng_rsp);
+					rxSar2txEng_rsp
+#if (RX_DDR_BYPASS)
+					,axis_data_count
+					,axis_max_data_count
+#endif
+				);
+
 	// TX Sar Table
 	tx_sar_table(	rxEng2txSar_upd_req,
 					//txApp2txSar_upd_req,

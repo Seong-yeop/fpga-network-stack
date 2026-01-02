@@ -42,11 +42,11 @@ const uint16_t MAX_SESSIONS = TCP_STACK_MAX_SESSIONS;
 const unsigned DATA_WIDTH_BITS = ConstLog2(DATA_WIDTH);
 const unsigned DATA_KEEP_BITS = ConstLog2(DATA_WIDTH/8);
 
-const unsigned WINDOW_SCALE_BITS = 2;
+const unsigned WINDOW_SCALE_BITS = 3;
 #if (WINDOW_SCALE)
-const unsigned WINDOW_BITS = 16 + WINDOW_SCALE_BITS;
+const unsigned WINDOW_BITS = 15 + WINDOW_SCALE_BITS;
 #else
-const unsigned WINDOW_BITS = 16;
+const unsigned WINDOW_BITS = 15;
 #endif
 
 const unsigned BUFFER_SIZE = (1 << WINDOW_BITS);
