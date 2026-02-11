@@ -18,7 +18,7 @@ set(FNS_TCP_STACK_FAST_RETRANSMIT_EN 1 CACHE STRING "Enabling TCP fast retransmi
 set(FNS_TCP_STACK_NODELAY_EN 1 CACHE STRING "Toggles Nagle's Algorithm on/off")
 set(FNS_TCP_STACK_MAX_SESSIONS 1000 CACHE STRING "Maximum number of sessions the TCP/IP stack can support")
 set(FNS_TCP_STACK_MSS 4096 CACHE STRING "Maximum Segment Size (MSS)")
-set(FNS_TCP_STACK_RX_DDR_BYPASS_EN 1 CACHE STRING "Enabling DDR bypass on the RX path")
+set(FNS_TCP_STACK_RX_DDR_BYPASS_EN 0 CACHE STRING "Enabling DDR bypass on the RX path")
 set(FNS_TCP_STACK_WINDOW_SCALING_EN 1 CACHE STRING "Enabling TCP window scaling option")
 
 # HLS IPs

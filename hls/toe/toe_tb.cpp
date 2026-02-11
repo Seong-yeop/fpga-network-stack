@@ -35,7 +35,7 @@
 #include <iomanip>
 
 #define noOfTxSessions 0 // Number of Tx Sessions to open for testing
-#define totalSimCycles 3000000
+#define totalSimCycles 30000
 
 using namespace std;
 
@@ -1249,7 +1249,7 @@ int main(int argc, char *argv[]) {
 
 		if (rxGoldCompare != 0){
 			cout << "RX Output != Golden RX Output. Simulation FAILED." << endl;
-			returnValue = 0;
+			returnValue = 1;
 		}
 		else cout << "RX Output == Golden RX Output" << endl;
 

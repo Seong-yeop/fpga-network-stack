@@ -1049,6 +1049,7 @@ void toe(	// Data & Memory Interface
 					regSessionCount);
 }
 
+#ifndef __SYNTHESIS__
 // Simulation wrapper using net_axis types (for C simulation with testbench)
 void toe(	// Data & Memory Interface
 			stream<net_axis<DATA_WIDTH> >&				ipRxData,
@@ -1126,3 +1127,4 @@ void toe(	// Data & Memory Interface
 					myIpAddress,
 					regSessionCount);
 }
+#endif // __SYNTHESIS__

@@ -26,6 +26,7 @@ add_files tx_sar_table/tx_sar_table.cpp -cflags $cflags
 add_files tx_app_interface/tx_app_interface.cpp -cflags $cflags
 add_files dummy_memory.cpp -cflags $cflags
 add_files toe.cpp -cflags $cflags
+
 add_files -tb toe_tb.cpp -cflags $cflags
 
 open_solution "solution1"
@@ -33,8 +34,8 @@ set_part {xc7vx690tffg1761-2}
 create_clock -period 6.66 -name default
 
 #csim_design -clean -argv {../../../../testVectors/io_finwp_5.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/rx_io_finwp_5.gold}
-#csim_design -clean -argv {0 ../../../../testVectors/io_fin_5.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/rx_io_fin_5.gold}
-csim_design -clean -argv {0 ../../../../testVectors/random.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/random.gold}
+csim_design -clean -argv {0 ../../../../testVectors/io_fin_5.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/rx_io_fin_5.gold}
+#csim_design -clean -argv {0 ../../../../testVectors/random.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/random.gold}
 #csim_design -clean -argv {0 ../../../../testVectors/mysyn.dat ../../../../testVectors/rxOutput.dat ../../../../testVectors/txOutput.dat ../../../../testVectors/rx_io_fin_5.gold}
 #csim_design -clean -setup
 #csynth_design
