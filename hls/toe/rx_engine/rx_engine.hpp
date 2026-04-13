@@ -110,7 +110,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification);
+				stream<appNotification>&			rxEng2rxApp_notification,
+				ap_uint<32>&						dbg_delayer_double_flag,
+				ap_uint<32>&						dbg_delayer_fifo_count,
+				ap_uint<32>&						dbg_delayer_notif_recv,
+				ap_uint<32>&						dbg_delayer_notif_fwd);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,

@@ -1675,7 +1675,11 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
  *  @TODO Handle unsuccessful write to memory
  */
 void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appNotification>&		internalNotificationFifoIn,
-								stream<appNotification>&		notificationOut, stream<ap_uint<1> > &doubleAccess) {
+								stream<appNotification>&		notificationOut, stream<ap_uint<1> > &doubleAccess,
+								ap_uint<32>&					dbg_delayer_double_flag,
+								ap_uint<32>&					dbg_delayer_fifo_count,
+								ap_uint<32>&					dbg_delayer_notif_recv,
+								ap_uint<32>&					dbg_delayer_notif_fwd) {
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
 
@@ -1688,6 +1692,15 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 	static mmStatus			rxAppNotificationStatus1, rxAppNotificationStatus2;
 	static appNotification	rxAppNotification;
 
+	// Debug counters — expose delayer internal state for hang diagnosis.
+	static ap_uint<32>		notif_recv_cnt = 0;
+	static ap_uint<32>		notif_fwd_cnt = 0;
+
+	dbg_delayer_double_flag = (ap_uint<32>)rxAppNotificationDoubleAccessFlag;
+	dbg_delayer_fifo_count  = (ap_uint<32>)rand_fifoCount;
+	dbg_delayer_notif_recv  = notif_recv_cnt;
+	dbg_delayer_notif_fwd   = notif_fwd_cnt;
+
 	if (rxAppNotificationDoubleAccessFlag == true) {
 		if(!rxWriteStatusIn.empty()) {
 			rxWriteStatusIn.read(rxAppNotificationStatus2);
@@ -1696,6 +1709,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 				if (rxAppNotification.length != 0)
 				{
 					notificationOut.write(rxAppNotification);
+					notif_fwd_cnt++;
 				}
 			rxAppNotificationDoubleAccessFlag = false;
 		}
@@ -1711,12 +1725,14 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 					if (rxAppNotification.length!=0)
 					{
 						notificationOut.write(rxAppNotification);				// Output the notification
+						notif_fwd_cnt++;
 					}
 			}
 			//TODO else, we are screwed since the ACK is already sent
 		}
 		else if (!internalNotificationFifoIn.empty() && (rand_fifoCount < 31)) {
 			internalNotificationFifoIn.read(rxAppNotification);
+			notif_recv_cnt++;
 			//if (rxAppNotification.length != 0) {
 			//	rand_notificationBuffer.write(rxAppNotification);
 			//	rand_fifoCount++;
@@ -1727,6 +1743,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 			if (rxAppNotification.closed & rxAppNotification.length == 0)
 			{
 				notificationOut.write(rxAppNotification);
+				notif_fwd_cnt++;
 			}
 			else
 			{
@@ -1942,7 +1959,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification)
+				stream<appNotification>&			rxEng2rxApp_notification,
+				ap_uint<32>&						dbg_delayer_double_flag,
+				ap_uint<32>&						dbg_delayer_fifo_count,
+				ap_uint<32>&						dbg_delayer_notif_recv,
+				ap_uint<32>&						dbg_delayer_notif_fwd)
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,
@@ -2131,7 +2152,9 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	//rxEngMemWrite(rxPkgDrop2rxMemWriter, rxTcpFsm2wrAccessBreakdown, rxBufferWriteCmd, rxBufferWriteData,rxEngDoubleAccess);
 	rxEngMemWrite<WIDTH>(rxPkgDrop2rxMemWriter, rxTcpFsm2wrAccessBreakdown, rxBufferWriteCmd, rxBufferWriteData,rxEngDoubleAccess);
 
-	rxAppNotificationDelayer(rxBufferWriteStatus, rx_internalNotificationFifo, rxEng2rxApp_notification, rxEngDoubleAccess);
+	rxAppNotificationDelayer(rxBufferWriteStatus, rx_internalNotificationFifo, rxEng2rxApp_notification, rxEngDoubleAccess,
+	                         dbg_delayer_double_flag, dbg_delayer_fifo_count,
+	                         dbg_delayer_notif_recv, dbg_delayer_notif_fwd);
 #else
 	rxPackageDropper(rxEng_dataBuffer3, rxEng_metaHandlerDropFifo, rxEng_fsmDropFifo, rxBufferWriteData);
 #endif
@@ -2161,7 +2184,11 @@ template void rx_engine<DATA_WIDTH>(	stream<net_axis<DATA_WIDTH> >&					ipRxData
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification);
+				stream<appNotification>&			rxEng2rxApp_notification,
+				ap_uint<32>&						dbg_delayer_double_flag,
+				ap_uint<32>&						dbg_delayer_fifo_count,
+				ap_uint<32>&						dbg_delayer_notif_recv,
+				ap_uint<32>&						dbg_delayer_notif_fwd);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,

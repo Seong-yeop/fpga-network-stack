@@ -817,12 +817,20 @@ int main(int argc, char *argv[]) {
 			}
 //			}
 		}
+		ap_uint<32> dbg_delayer_double_flag_tb;
+		ap_uint<32> dbg_delayer_fifo_count_tb;
+		ap_uint<32> dbg_delayer_notif_recv_tb;
+		ap_uint<32> dbg_delayer_notif_fwd_tb;
 		toe(ipRxData, rxBufferWriteStatus, txBufferWriteStatus, rxBufferReadData, txBufferReadData, ipTxData, rxBufferWriteCmd,
 			rxBufferReadCmd, txBufferWriteCmd, txBufferReadCmd, rxBufferWriteData, txBufferWriteData, sessionLookup_rsp, sessionUpdate_rsp,
 			sessionLookup_req, sessionUpdate_req, listenPortReq, rxDataReq, openConnReq, closeConnReq, txDataReqMeta, txDataReq,
 			//listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp);
 			//relSessionCount, regSessionCount);
-			listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp, 0x01010101, /*relSessionCount,*/ regSessionCount);
+			listenPortRsp, notification, rxDataRspMeta, rxDataRsp, openConnRsp, txDataRsp, 0x01010101, /*relSessionCount,*/ regSessionCount
+#if !(RX_DDR_BYPASS)
+			, dbg_delayer_double_flag_tb, dbg_delayer_fifo_count_tb, dbg_delayer_notif_recv_tb, dbg_delayer_notif_fwd_tb
+#endif
+			);
 
 		//TODO use actual iperf
 		convertStreamWidth<DATA_WIDTH, 22>(rxDataRsp, rxDataRsp64);

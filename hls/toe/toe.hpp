@@ -42,7 +42,7 @@ const uint16_t MAX_SESSIONS = TCP_STACK_MAX_SESSIONS;
 const unsigned DATA_WIDTH_BITS = ConstLog2(DATA_WIDTH);
 const unsigned DATA_KEEP_BITS = ConstLog2(DATA_WIDTH/8);
 
-const unsigned WINDOW_SCALE_BITS = 3;
+const unsigned WINDOW_SCALE_BITS = 3; // 3 : 256KiB, 6 : 2MiB, 7 : 4MiB
 #if (WINDOW_SCALE)
 const unsigned WINDOW_BITS = 15 + WINDOW_SCALE_BITS;
 #else
@@ -213,7 +213,15 @@ void toe_core(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount);
+			ap_uint<16>&							regSessionCount
+#if !(RX_DDR_BYPASS)
+			,
+			ap_uint<32>&							dbg_delayer_double_flag,
+			ap_uint<32>&							dbg_delayer_fifo_count,
+			ap_uint<32>&							dbg_delayer_notif_recv,
+			ap_uint<32>&							dbg_delayer_notif_fwd
+#endif
+			);
 
 
 #endif

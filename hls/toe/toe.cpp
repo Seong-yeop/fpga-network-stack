@@ -132,8 +132,8 @@ void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outpu
 		if (!inputMemAccess.empty())
  		{
 			rxAppTempCmd = inputMemAccess.read();
-			if ((rxAppTempCmd.saddr.range(15, 0) + rxAppTempCmd.bbt) > 65536) {
-				rxAppAccLength = 65536 - rxAppTempCmd.saddr;
+			if ((rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0) + rxAppTempCmd.bbt) > BUFFER_SIZE) {
+				rxAppAccLength = BUFFER_SIZE - rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0);
 				outputMemAccess.write(mmCmd(rxAppTempCmd.saddr, rxAppAccLength));
 				rxAppBreakdown = true;
 			}
@@ -144,10 +144,10 @@ void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outpu
 		}
 	}
 	else if (rxAppBreakdown == true) {
-		rxAppTempCmd.saddr.range(15, 0) = 0;
+		rxAppTempCmd.saddr.range(WINDOW_BITS-1, 0) = 0;
 		rxAppAccLength = rxAppTempCmd.bbt - rxAppAccLength;
 		outputMemAccess.write(mmCmd(rxAppTempCmd.saddr, rxAppAccLength));
-		//std::cerr << "Mem.Cmd: " << std::hex << rxAppTempCmd.saddr << " - " << rxAppTempCmd.bbt - (65536 - rxAppTempCmd.saddr) << std::endl;
+		//std::cerr << "Mem.Cmd: " << std::hex << rxAppTempCmd.saddr << " - " << rxAppTempCmd.bbt - (BUFFER_SIZE - rxAppTempCmd.saddr) << std::endl;
 		rxAppBreakdown = false;
 	}
 }
@@ -252,7 +252,7 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 
 			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range((rxAppMemRdOffset * 8) - 1, 0);	// In any case, insert the data of the new data word in the old one. Here we don't pay attention to the exact number of bytes in the new data word. In case they don't fill the entire remaining gap, there will be garbage in the output but it doesn't matter since the KEEP signal indicates which bytes are valid.
 			rxAppMemRdRxWord = rxBufferReadData.read();
-			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range(((8 - rxAppMemRdOffset) * 8) - 1, 0);				// Buffer & realign temp into rxAppmemRdRxWord (which is a static variable)
+			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range((((WIDTH/8) - rxAppMemRdOffset) * 8) - 1, 0);				// Buffer & realign temp into rxAppmemRdRxWord (which is a static variable)
 			ap_uint<8> tempCounter = keepToLen(rxAppMemRdRxWord.keep);					// Determine how any bytes are valid in the new data word. It might be that this is the only data word of the 2nd segment
 			rxAppOffsetBuffer = tempCounter - ((WIDTH/8) - rxAppMemRdOffset);				// Calculate the number of bytes to go into the next & final data word
 			if (rxAppMemRdRxWord.last == 1) {
@@ -278,9 +278,9 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 			temp.keep = ~uint64_t(0);
 			temp.last = 0;
 
-			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, ((8 - rxAppMemRdOffset) * 8));
+			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, (((WIDTH/8) - rxAppMemRdOffset) * 8));
 			rxAppMemRdRxWord = rxBufferReadData.read();							// Read the new data word in
-			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range(((8 - rxAppMemRdOffset) * 8) - 1, 0);
+			temp.data.range(WIDTH-1, (rxAppMemRdOffset * 8)) = rxAppMemRdRxWord.data.range((((WIDTH/8) - rxAppMemRdOffset) * 8) - 1, 0);
 			ap_uint<8> tempCounter = keepToLen(rxAppMemRdRxWord.keep);			// Determine how any bytes are valid in the new data word. It might be that this is the only data word of the 2nd segment
 			rxAppOffsetBuffer = tempCounter - ((WIDTH/8) - rxAppMemRdOffset);				// Calculate the number of bytes to go into the next & final data word
 			if (rxAppMemRdRxWord.last == 1) {
@@ -303,7 +303,7 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 			temp.keep = lenToKeep(rxAppOffsetBuffer);
 			temp.last = 1;
 
-			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, ((8 - rxAppMemRdOffset) * 8));
+			temp.data.range((rxAppMemRdOffset * 8) - 1, 0) = rxAppMemRdRxWord.data.range(WIDTH-1, (((WIDTH/8) - rxAppMemRdOffset) * 8));
 			rxDataRsp.write(temp);												// And finally write the data word to the output
 			//std::cerr << "Mem.Data: " << std::hex << temp.data << " - " << temp.keep << " - " << temp.last << std::endl;
 			rxAppState = RXAPP_IDLE;											// And go back to the idle stage
@@ -487,7 +487,15 @@ void toe_core(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount)
+			ap_uint<16>&							regSessionCount
+#if !(RX_DDR_BYPASS)
+			,
+			ap_uint<32>&							dbg_delayer_double_flag,
+			ap_uint<32>&							dbg_delayer_fifo_count,
+			ap_uint<32>&							dbg_delayer_notif_recv,
+			ap_uint<32>&							dbg_delayer_notif_fwd
+#endif
+			)
 {
 	#pragma HLS INLINE
 
@@ -753,7 +761,11 @@ void toe_core(	// Data & Memory Interface
 				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				rxBufferWriteCmd,
-				rxEng2rxApp_notification
+				rxEng2rxApp_notification,
+				dbg_delayer_double_flag,
+				dbg_delayer_fifo_count,
+				dbg_delayer_notif_recv,
+				dbg_delayer_notif_fwd
 #else
 				rxEng2rxApp_notification,
 				axis_data_count,
@@ -876,7 +888,15 @@ void toe(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount)
+			ap_uint<16>&							regSessionCount
+#if !(RX_DDR_BYPASS)
+			,
+			ap_uint<32>&							dbg_delayer_double_flag,
+			ap_uint<32>&							dbg_delayer_fifo_count,
+			ap_uint<32>&							dbg_delayer_notif_recv,
+			ap_uint<32>&							dbg_delayer_notif_fwd
+#endif
+			)
 {
 #pragma HLS DATAFLOW disable_start_propagation
 #pragma HLS INTERFACE ap_ctrl_none port=return
@@ -955,6 +975,13 @@ void toe(	// Data & Memory Interface
 
 	#pragma HLS INTERFACE ap_none register port=myIpAddress
 	#pragma HLS INTERFACE ap_vld port=regSessionCount
+
+#if !(RX_DDR_BYPASS)
+	#pragma HLS INTERFACE ap_vld port=dbg_delayer_double_flag
+	#pragma HLS INTERFACE ap_vld port=dbg_delayer_fifo_count
+	#pragma HLS INTERFACE ap_vld port=dbg_delayer_notif_recv
+	#pragma HLS INTERFACE ap_vld port=dbg_delayer_notif_fwd
+#endif
 
 
 	static hls::stream<net_axis<DATA_WIDTH> > ipRxData_internal;
@@ -1038,5 +1065,13 @@ void toe(	// Data & Memory Interface
 					axis_max_data_count,
 #endif
 					myIpAddress,
-					regSessionCount);
+					regSessionCount
+#if !(RX_DDR_BYPASS)
+					,
+					dbg_delayer_double_flag,
+					dbg_delayer_fifo_count,
+					dbg_delayer_notif_recv,
+					dbg_delayer_notif_fwd
+#endif
+					);
 }
