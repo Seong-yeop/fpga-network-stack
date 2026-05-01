@@ -69,24 +69,32 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		rxSarReply reply (entry);
 
 #if (RX_DDR_BYPASS)
-      // MARGIN: 16 active sessions × 64 entries = 1024
-      const ap_uint<16> FIFO_MARGIN = 1024;
+      ap_uint<WINDOW_BITS> actualWindowSize = 0;
 
-      // Buffer Free Space
-      ap_uint<WINDOW_BITS> buffer_free = (entry.appd - ((ap_uint<WINDOW_BITS>)entry.recvd)) - 1;
+      if ((rxbuffer_max_data_count != 0) && (rxbuffer_data_count < rxbuffer_max_data_count))
+      {
+        ap_uint<16> fifo_free_entries = rxbuffer_max_data_count - rxbuffer_data_count;
+        ap_uint<18> fifo_free_entries_wide = fifo_free_entries;
+        ap_uint<18> rxbuffer_max_data_count_wide = rxbuffer_max_data_count;
+        ap_uint<WINDOW_BITS> target_window = 0;
 
-      // FIFO Free Space (with MARGIN)
-      ap_uint<16> fifo_free_entries = rxbuffer_max_data_count - rxbuffer_data_count;
-      ap_uint<16> safe_fifo_entries = (fifo_free_entries > FIFO_MARGIN) ?
-                                       (ap_uint<16>)(fifo_free_entries - FIFO_MARGIN) : (ap_uint<
-16>)0;
+        if ((fifo_free_entries_wide << 2) <= rxbuffer_max_data_count_wide)
+        {
+          target_window = 0;
+        }
+        else if ((fifo_free_entries_wide << 1) <= rxbuffer_max_data_count_wide)
+        {
+          target_window = MSS;
+        }
+        else
+        {
+          target_window = 2 * MSS;
+        }
 
-      // entries → bytes (* 64)
-      ap_uint<WINDOW_BITS> fifo_free_bytes = ((ap_uint<WINDOW_BITS>)safe_fifo_entries) << 6;
-
-      // Calculate actual window size
-      ap_uint<WINDOW_BITS> actualWindowSize = (fifo_free_bytes < buffer_free) ?
-                                               fifo_free_bytes : buffer_free;
+        ap_uint<WINDOW_BITS + 6> fifo_free_bytes = ((ap_uint<WINDOW_BITS + 6>)fifo_free_entries) << 6;
+        actualWindowSize = (fifo_free_bytes < target_window) ?
+                           (ap_uint<WINDOW_BITS>)fifo_free_bytes : target_window;
+      }
 
 #if (WINDOW_SCALE)
       reply.windowSize = actualWindowSize >> entry.win_shift;
