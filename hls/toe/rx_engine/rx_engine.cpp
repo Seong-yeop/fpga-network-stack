@@ -1680,7 +1680,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 #pragma HLS pipeline II=1
 
 	static stream<appNotification> rand_notificationBuffer("rand_notificationBuffer");
-	#pragma HLS STREAM variable=rand_notificationBuffer depth=32 //depends on memory delay
+	#pragma HLS STREAM variable=rand_notificationBuffer depth=1024 //depends on memory delay
 	#pragma HLS aggregate  variable=rand_notificationBuffer compact=bit
 
 	static ap_uint<1>		rxAppNotificationDoubleAccessFlag = false;
@@ -2003,7 +2003,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	#pragma HLS aggregate  variable=rxEng_fsmDropFifo compact=bit
 
 	static stream<appNotification> rx_internalNotificationFifo("rx_internalNotificationFifo");
-	#pragma HLS stream variable=rx_internalNotificationFifo depth=8 //This depends on the memory delay
+	#pragma HLS stream variable=rx_internalNotificationFifo depth=1024 //This depends on the memory delay
 	#pragma HLS aggregate  variable=rx_internalNotificationFifo compact=bit
 
 	static stream<mmCmd> 					rxTcpFsm2wrAccessBreakdown("rxTcpFsm2wrAccessBreakdown");

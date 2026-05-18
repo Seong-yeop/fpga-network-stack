@@ -622,9 +622,9 @@ void toe_core(	// Data & Memory Interface
 	static stream<appNotification> 			rxEng2rxApp_notification("rxEng2rxApp_notification");
 	static stream<appNotification>			timer2rxApp_notification("timer2rxApp_notification");
 	static stream<openStatus>				timer2txApp_notification("timer2txApp_notification");
-	#pragma HLS stream variable=rxEng2rxApp_notification		depth=4
-	#pragma HLS stream variable=timer2rxApp_notification		depth=4
-	#pragma HLS stream variable=timer2txApp_notification		depth=4
+	#pragma HLS stream variable=rxEng2rxApp_notification		depth=1024
+	#pragma HLS stream variable=timer2rxApp_notification		depth=1024
+	#pragma HLS stream variable=timer2txApp_notification		depth=1024
 	#pragma HLS aggregate variable=rxEng2rxApp_notification compact=bit
 	#pragma HLS aggregate variable=timer2rxApp_notification compact=bit
 	#pragma HLS aggregate variable=timer2txApp_notification compact=bit
