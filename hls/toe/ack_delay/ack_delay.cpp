@@ -45,7 +45,7 @@ void ack_delay(	stream<extendedEvent>&	input,
 	//static ap_uint<4>	ad_readCounter = 0;
 	extendedEvent ev;
 
-	if (!input.empty() && !output.full())
+	if (!input.empty()) //&& !output.full())
 	{
 		input.read(ev);
 		readCountFifo.write(1);

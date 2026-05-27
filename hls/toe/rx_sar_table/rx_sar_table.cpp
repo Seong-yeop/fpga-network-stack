@@ -88,7 +88,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
         }
         else
         {
-          target_window = 2 * MSS;
+          target_window = 8 * MSS;
         }
 
         ap_uint<WINDOW_BITS + 6> fifo_free_bytes = ((ap_uint<WINDOW_BITS + 6>)fifo_free_entries) << 6;

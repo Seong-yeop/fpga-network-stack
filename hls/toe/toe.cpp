@@ -968,7 +968,8 @@ void toe(	// Data & Memory Interface
 	static hls::stream<net_axis<DATA_WIDTH> > rxBufferWriteData_internal;
 	#pragma HLS STREAM depth=2 variable=rxBufferWriteData_internal
 	static hls::stream<net_axis<DATA_WIDTH> > txBufferWriteData_internal;
-	#pragma HLS STREAM depth=2 variable=txBufferWriteData_internal
+	#pragma HLS STREAM depth=32 variable=txBufferWriteData_internal
+	#pragma HLS BIND_STORAGE variable=txBufferWriteData_internal type=fifo impl=bram
 	static hls::stream<net_axis<DATA_WIDTH> > txDataReq_internal;
 	#pragma HLS STREAM depth=2 variable=txDataReq_internal
 	static hls::stream<net_axis<DATA_WIDTH> > rxDataRsp_internal;
