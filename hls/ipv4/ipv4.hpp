@@ -88,7 +88,7 @@ void drop_optional_ip_header(	stream<ap_uint<4> >&	process2dropLengthFifo,
 					doh_state = SHIFT;
 				}
 			}
-			if (WIDTH == 256 || WIDTH == 512)
+			if (WIDTH == 256 || WIDTH == 512 || WIDTH == 1024)
 			{
 				//TODO this is a hack and only works if there are no IP options
 				if (length == 5)
@@ -376,49 +376,20 @@ void toe_check_ipv4_checksum(	hls::stream<subSums<N> >&	subSumFiFoIn,
 	if (!subSumFiFoIn.empty())
 	{
 		subSums<N> icic_ip_sums = subSumFiFoIn.read();
-
-		if (N >= 32)
+		// Vivado 2024.2 mis-synthesizes the per-level add-and-fold tree for N=64 (the end-around
+		// carry is double-counted at two tree levels), so accumulate the folded lane sums in 32 bits
+		// and fold once at the end. Every lane is already <= 0xFFFF, so 64 lanes fit in 22 bits.
+		ap_uint<32> total = 0;
+		for (int i = 0; i < N; i++)
 		{
-			for (int i = 0; i < 16; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+16];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
+			#pragma HLS unroll
+			total += icic_ip_sums.sum[i];
 		}
-
-		if (N >= 16)
-		{
-			for (int i = 0; i < 8; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+8];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
-		}
-
-		if (N >= 8)
-		{
-			for (int i = 0; i < 4; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+4];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
-		}
-
-		//N >= 4 -> 64bit data
-		icic_ip_sums.sum[0] += icic_ip_sums.sum[2];
-		icic_ip_sums.sum[1] += icic_ip_sums.sum[3];
-		icic_ip_sums.sum[0] = (icic_ip_sums.sum[0] + (icic_ip_sums.sum[0] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[1] = (icic_ip_sums.sum[1] + (icic_ip_sums.sum[1] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[0] += icic_ip_sums.sum[1];
-		icic_ip_sums.sum[0] = (icic_ip_sums.sum[0] + (icic_ip_sums.sum[0] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[0] = ~icic_ip_sums.sum[0];
-		std::cout << "checked checksum: " << std::hex << (uint16_t) icic_ip_sums.sum[0](15, 0) << std::endl;
-		checkSumFifoOut.write(icic_ip_sums.sum[0](15, 0) == 0);
+		total = (total & 0xFFFF) + (total >> 16);
+		total = (total & 0xFFFF) + (total >> 16);
+		ap_uint<16> result = ~total(15, 0);
+		checkSumFifoOut.write(result == 0);
 	}
-
 }
 
 //A hack to Vitis working flow
@@ -488,47 +459,19 @@ void finalize_ipv4_checksum(hls::stream<subSums<N> >&	subSumFiFoIn,
 	if (!subSumFiFoIn.empty())
 	{
 		subSums<N> icic_ip_sums = subSumFiFoIn.read();
-
-		if (N >= 32)
+		// Vivado 2024.2 mis-synthesizes the per-level add-and-fold tree for N=64 (the end-around
+		// carry is double-counted at two tree levels), so accumulate the folded lane sums in 32 bits
+		// and fold once at the end. Every lane is already <= 0xFFFF, so 64 lanes fit in 22 bits.
+		ap_uint<32> total = 0;
+		for (int i = 0; i < N; i++)
 		{
-			for (int i = 0; i < 16; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+16];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
+			#pragma HLS unroll
+			total += icic_ip_sums.sum[i];
 		}
-
-		if (N >= 16)
-		{
-			for (int i = 0; i < 8; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+8];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
-		}
-
-		if (N >= 8)
-		{
-			for (int i = 0; i < 4; i++)
-			{
-				#pragma HLS unroll
-				icic_ip_sums.sum[i] += icic_ip_sums.sum[i+4];
-				icic_ip_sums.sum[i] = (icic_ip_sums.sum[i] + (icic_ip_sums.sum[i] >> 16)) & 0xFFFF;
-			}
-		}
-
-		//N >= 4 -> 64bit data
-		icic_ip_sums.sum[0] += icic_ip_sums.sum[2];
-		icic_ip_sums.sum[1] += icic_ip_sums.sum[3];
-		icic_ip_sums.sum[0] = (icic_ip_sums.sum[0] + (icic_ip_sums.sum[0] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[1] = (icic_ip_sums.sum[1] + (icic_ip_sums.sum[1] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[0] += icic_ip_sums.sum[1];
-		icic_ip_sums.sum[0] = (icic_ip_sums.sum[0] + (icic_ip_sums.sum[0] >> 16)) & 0xFFFF;
-		icic_ip_sums.sum[0] = ~icic_ip_sums.sum[0];
-		std::cout << "finalized checksum: " << std::hex << (uint16_t) icic_ip_sums.sum[0](15, 0) << std::endl;
-		checkSumFifoOut.write(icic_ip_sums.sum[0](15, 0));
+		total = (total & 0xFFFF) + (total >> 16);
+		total = (total & 0xFFFF) + (total >> 16);
+		ap_uint<16> result = ~total(15, 0);
+		checkSumFifoOut.write(result);
 	}
 }
 

@@ -187,7 +187,7 @@ struct txSarEntry
 #endif
 	ap_uint<WINDOW_BITS> cong_window;
 	ap_uint<WINDOW_BITS> slowstart_threshold;
-	ap_uint<WINDOW_BITS> app;
+	ap_uint<32> app; // Completed buffer-write sequence, including wrap epoch.
 	ap_uint<2>	count;
 	bool		fastRetransmitted;
 	bool		finReady;
@@ -340,9 +340,10 @@ struct txTxSarReply
 //#if (WINDOW_SCALE)
 	ap_uint<4>	win_shift;
 //#endif
+	bool writesPending;
 	txTxSarReply() {}
-	txTxSarReply(ap_uint<32> ack, ap_uint<32> nack, ap_uint<WINDOW_BITS> usableWindow, ap_uint<WINDOW_BITS> app, ap_uint<WINDOW_BITS> usedLength, bool finReady, bool finSent)
-		:ackd(ack), not_ackd(nack), usableWindow(usableWindow), app(app), usedLength(usedLength), finReady(finReady), finSent(finSent) {}
+	txTxSarReply(ap_uint<32> ack, ap_uint<32> nack, ap_uint<WINDOW_BITS> usableWindow, ap_uint<WINDOW_BITS> app, ap_uint<WINDOW_BITS> usedLength, bool finReady, bool finSent, bool pending=false)
+		:ackd(ack), not_ackd(nack), usableWindow(usableWindow), app(app), usedLength(usedLength), finReady(finReady), finSent(finSent), writesPending(pending) {}
 };
 
 struct rxRetransmitTimerUpdate {

@@ -1068,6 +1068,52 @@ void ip_handler_duplicate_stream(	hls::stream<T>&	in,
 ap_uint<64> lenToKeep(ap_uint<6> length);
 ap_uint<8> keepToLen(ap_uint<64> keepValue);
 
+// Explicit byte lengths: zero is empty, WIDTH/8 is a full beat.
+// Keep the legacy lenToKeep(0) convention unchanged for other users.
+template<int WIDTH>
+ap_uint<WIDTH/8> toeLenToKeep(ap_uint<16> length)
+{
+    #pragma HLS INLINE
+    ap_uint<WIDTH/8> keep = 0;
+    for (int i = 0; i < WIDTH/8; ++i) {
+        #pragma HLS UNROLL
+        keep[i] = i < length;
+    }
+    return keep;
+}
+
+template<int WIDTH>
+ap_uint<16> toeKeepToLen(ap_uint<WIDTH/8> keep)
+{
+    #pragma HLS INLINE
+    // Encode the boundary of a contiguous low-byte keep using parallel
+    // OR reductions. This avoids both a priority mux and an adder chain.
+    ap_uint<WIDTH/8> boundary = keep & ~(keep >> 1);
+    ap_uint<16> length = 0;
+    for (int bit = 0; bit < 16; ++bit) {
+        #pragma HLS UNROLL
+        ap_uint<WIDTH/8> mask = 0;
+        for (int i = 0; i < WIDTH/8; ++i) {
+            #pragma HLS UNROLL
+            mask[i] = ((i + 1) >> bit) & 1;
+        }
+        length[bit] = (boundary & mask).or_reduce();
+    }
+    return length;
+}
+
+template<int WIDTH>
+net_axis<WIDTH> toeAlignWords(ap_uint<16> offset, net_axis<WIDTH> prevWord,
+                              net_axis<WIDTH> currWord)
+{
+    #pragma HLS INLINE
+    net_axis<WIDTH> result;
+    result.data = (prevWord.data >> (offset * 8)) | (currWord.data << (WIDTH - offset * 8));
+    result.keep = (prevWord.keep >> offset) | (currWord.keep << (WIDTH/8 - offset));
+    result.last = currWord.last;
+    return result;
+}
+
 template<int WIDTH>
 net_axis<WIDTH> alignWords(ap_uint<6> offset, net_axis<WIDTH>	prevWord, net_axis<WIDTH> currWord)
 {

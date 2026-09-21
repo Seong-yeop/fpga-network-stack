@@ -452,6 +452,13 @@ void processPseudoHeader(stream<net_axis<WIDTH> >&					dataIn,
 
 		if (header.isReady())
 		{
+			// Reject impossible TCP header lengths before publishing payload metadata.
+			if (!metaWritten)
+			{
+				pkgValid = pkgValid && header.getDataOffset() >= 5
+					&& header.getLength() >= (header.getDataOffset() * 4);
+			}
+
 			if (pkgValid && WIDTH > TCP_FULL_PSEUDO_HEADER_SIZE && ((header.getLength() - (header.getDataOffset() * 4) != 0 || (header.getDataOffset() > 5))))// && WIDTH == 512)
 			{
 				dataOut.write(word);
@@ -649,7 +656,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 
 	enum fsmStateType {IDLE, PARSE};
 	static fsmStateType state = IDLE;
-	static ap_uint<4> dataOffset;
+	static ap_uint<6> remainingBytes;
 	static ap_uint<320> fields;
 
 	switch (state)
@@ -658,7 +665,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 		if (!dataOffsetIn.empty() && !optionalHeaderFieldsIn.empty())
 		{
 			// std::cout << "PARSE IDLE" << std::endl;
-			dataOffsetIn.read(dataOffset);
+			remainingBytes = ((ap_uint<6>)dataOffsetIn.read()) * 4;
 			optionalHeaderFieldsIn.read(fields);
 			state = PARSE;
 		}
@@ -666,6 +673,16 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 	case PARSE:
 		ap_uint<8> optionKind = fields(7, 0);
 		ap_uint<8> optionLength = fields(15, 8);
+
+		// Options are byte-sized; an invalid length must not trap this FSM.
+		if (remainingBytes == 0 ||
+			(optionKind > 1 && (optionLength < 2 || optionLength > remainingBytes)) ||
+			(optionKind == 3 && optionLength != 3))
+		{
+			windowScaleOut.write(0);
+			state = IDLE;
+			break;
+		}
 
 		switch (optionKind)
 		{
@@ -683,7 +700,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 			state = IDLE;
 			break;
 		default:
-			if (dataOffset == optionLength)
+			if (remainingBytes == optionLength)
 			{
 				windowScaleOut.write(0);
 				// std::cout << "PARSE DONE" << std::endl;
@@ -691,7 +708,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 			}
 			break;
 		}//switch
-		dataOffset -= optionLength;
+		remainingBytes -= optionLength;
 		fields = (fields >> (optionLength*8));
 		break;
 	}//switch
@@ -1822,7 +1839,7 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 			}
 			else
 			{
-				sendWord.keep = lenToKeep(remainingLength);
+				sendWord.keep = toeLenToKeep<WIDTH>(remainingLength);
 				sendWord.last = 1;
 
 				cmd.saddr(WINDOW_BITS-1, 0) = 0;

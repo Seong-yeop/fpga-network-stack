@@ -1,0 +1,52 @@
+[
+  {
+    "repository": "google/packetdrill",
+    "reference_commit": "2c4001c4d6fc04a3bbd01d4b92be62717a37648a",
+    "url": "https://github.com/google/packetdrill"
+  },
+  {
+    "repository": "torvalds/linux",
+    "reference_commit": "518e5b794c06c0f0eb40df3e202274a66202c137",
+    "url": "https://github.com/torvalds/linux"
+  },
+  {
+    "repository": "lwip-tcpip/lwip",
+    "reference_commit": "d08f4773edd0182b7910fc8f046eed82ffcd67c9",
+    "url": "https://github.com/lwip-tcpip/lwip"
+  },
+  {
+    "repository": "smoltcp-rs/smoltcp",
+    "reference_commit": "efcba2efc87b6dcc8a2953de5768dbcc83b8fac6",
+    "url": "https://github.com/smoltcp-rs/smoltcp"
+  },
+  {
+    "repository": "google/gvisor",
+    "reference_commit": "26f3455a4cb9a377354c33aeac049080a077c79c",
+    "url": "https://github.com/google/gvisor"
+  },
+  {
+    "repository": "nsnam/ns-3-dev-git",
+    "reference_commit": "49465fef9e9e72fdff259d12535d38a4d72e604f",
+    "url": "https://github.com/nsnam/ns-3-dev-git"
+  },
+  {
+    "repository": "secdev/scapy",
+    "reference_commit": "94a853bf59b43e75848716736a24e51064202e1a",
+    "url": "https://github.com/secdev/scapy"
+  },
+  {
+    "repository": "alexforencich/cocotbext-axi",
+    "reference_commit": "264319c17f0869e4d0efb15ad0e6d74e3bef453c",
+    "url": "https://github.com/alexforencich/cocotbext-axi"
+  },
+  {
+    "repository": "alexforencich/verilog-axis",
+    "reference_commit": "48ff7a7e2ef782cf778d47910cf85835c64b1bce",
+    "url": "https://github.com/alexforencich/verilog-axis"
+  },
+  {
+    "repository": "fpgasystems/fpga-network-stack",
+    "reference_commit": "75c32bae73f5c336b5c46c9de35ae0cb9cb7cc1c",
+    "url": "https://github.com/fpgasystems/fpga-network-stack"
+  }
+]

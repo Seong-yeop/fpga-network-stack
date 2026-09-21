@@ -91,7 +91,8 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
           target_window = 8 * MSS;
         }
 
-        ap_uint<WINDOW_BITS + 6> fifo_free_bytes = ((ap_uint<WINDOW_BITS + 6>)fifo_free_entries) << 6;
+        ap_uint<16 + DATA_KEEP_BITS> fifo_free_bytes =
+            ((ap_uint<16 + DATA_KEEP_BITS>)fifo_free_entries) << DATA_KEEP_BITS;
         actualWindowSize = (fifo_free_bytes < target_window) ?
                            (ap_uint<WINDOW_BITS>)fifo_free_bytes : target_window;
       }

@@ -1,0 +1,115 @@
+# 개별 TOE 추가 TB
+
+각 시나리오는 `cases/tb_<name>.cpp`와 `cases/tb_<name>.svh`에 분리했다.
+C++ 모델은 `common/csim.hpp`, SV 패킷/메모리 모델은 `common/xsim.svh`,
+SV 클록·초기화·bounded queue 구동은 `common/extended.svh`에서 공유한다.
+선택한 SV 파일 하나를 실제 생성 RTL과 결합해 독립 XSim top을 만든다.
+새 packetdrill parser나 별도 시뮬레이션 프레임워크는 추가하지 않았다.
+
+## 실행
+
+```sh
+# 이 디렉터리에서 실행. 최초 1회 설치(오프라인 packet checker 전용).
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+
+# 개별 C-sim → 기존 top 합성 → 개별 XSim
+./run_cases.sh 128 csim errors
+./run.sh 128 csim
+./run.sh 128 synth
+./run_cases.sh 128 xsim errors
+
+# 모든 독립 case (각 case는 새 simulation process로 실행)
+./run_cases.sh 64 csim
+./run_cases.sh 128 csim
+./run_cases.sh 64 xsim
+./run_cases.sh 128 xsim
+
+# 특정 채널의 last beat를 4096 clocks 동안 정지
+TOE_TARGET=10 TOE_STALL=4096 TOE_POSITION=2 ./run_cases.sh 128 xsim backpressure
+
+# Seed 고정 무작위 ready 및 source idle
+TOE_PROFILE=4 TOE_SEED=42 ./run_cases.sh 128 xsim errors
+
+# Window Scale 제안: 미제안(-1), 0, 3, 7
+TOE_WS=7 ./run_cases.sh 128 csim options
+TOE_WS=7 ./run_cases.sh 128 xsim options
+
+# 채널별/beat별/seed별 전체 backpressure 행렬
+./run_backpressure.sh 64
+./run_backpressure.sh 128
+```
+
+DUT 소스 변경 시 C-sim과 합성을 다시 수행한다. XSim runner는 해당 case의
+C-sim PASS를 요구하고, RTL/TB fingerprint가 같을 때만 elaboration을 재사용한다.
+`timers`와 `probe_timer`는 C-sim 컴포넌트 전용으로 `CSIM_ONLY`를 표시한다.
+
+## 파일별 시나리오
+
+| TB 이름 | 검증 내용 |
+|---|---|
+| `ack` | 미래/과거/부분 ACK 이후 유효 ACK와 후속 TX/RX |
+| `reorder` | out-of-order, duplicate, overlap 드롭 및 in-order 재전송 복구 |
+| `sequence_wrap` | peer ISN `0xfffffff0`, RX 32bit sequence wrap |
+| `tx_sequence_wrap` | TX SAR 기존 요청 포트로 wrap 상태 구성, ACK/미확인 byte 계산과 응답 stall |
+| `errors` | TCP checksum 오류, Data Offset < 5 또는 TCP 길이 초과, 이후 정상 수신 |
+| `options` | MSS 광고와 WS 미제안/0/3/7, 연결 후 RX/TX |
+| `malformed_options` | 길이 0/1/범위 초과 옵션의 parser 정지 방지; 다음 유효 옵션/연결 복구 |
+| `connection` | 중복 SYN의 동일 ISN 유지, invalid RST 무시, valid RST 이후 수신 중단 |
+| `active_open` | 애플리케이션 open → SYN/SYN-ACK → open status, RX/TX |
+| `close` | local FIN 후 peer FIN+payload, payload 보존과 FIN sequence byte ACK |
+| `closed_port` | 닫힌 포트 SYN의 RST 응답, 이후 listen/연결/수신 |
+| `multisession` | 8개 tuple과 실제 session ID의 매칭, 혼합 RX/TX |
+| `backpressure` | active open, RX/TX, fast retransmit의 전체 인터페이스 stall |
+| `timers` | 기존 C-sim 단축 상수로 RTO event 및 cancel 검증. 실제 timeout 시간 인증 아님 |
+| `probe_timer` | probe 만료 event, RX에 의한 fast resume, one-shot 동작 |
+| `write_retransmit` | write가 정지된 동안 빠른 재전송을 유도해 write 완료 status 전 read 금지·완료 후 재개 검증 |
+
+`tx_sequence_wrap`의 SV TB는 top 내부 값을 force하지 않는다. 기존 HLS 생성물의
+`toe_tx_sar_table` 컴포넌트를 기존 FIFO 요청 인터페이스로 직접 구동한다.
+
+## Backpressure와 oracle
+
+- `PROFILE=0`: 기본 ready, `1/2/3`: ready 비율 1/2, 1/4, 3/4의 주기 패턴.
+- `PROFILE=4/5/6`: ready 확률 1/4, 1/2, 3/4의 고정-seed PRBS 패턴.
+- `PROFILE=7`: 전송 중 모든 출력 채널을 1024 clocks 정지한 뒤 재개한다.
+- source idle은 새 beat 전에만 삽입한다. 이미 제시한 VALID는 handshake까지 유지한다.
+- `TARGET`은 각 `xsim_<width>_backpressure/channels.txt`에 기록된 출력 채널 번호다.
+- `POSITION=0/1/2`는 첫 transaction / multi-beat frame의 중간 / 마지막 beat다.
+  첫 SYN 한 beat를 데이터의 middle/last stall로 잘못 세지 않도록 frame별 beat를 센다.
+- 모든 출력 채널에 첫 transaction 64-cycle stall을 적용하고, 4개 데이터 출력에는
+  1/2/7/1024/4096-cycle middle/last stall을 적용한다. 전체 행렬은 폭당 69개 조건이다.
+- 메모리 outstanding 8, session response queue 4, application data buffer 8 beats.
+  독립 metadata/data 채널은 두 FIFO의 순서로 매칭한다. metadata가 늦다는 이유만으로
+  먼저 도착한 정상 data를 DUT 오류로 처리하지 않는다.
+- 선택한 채널의 stall이 실제로 관찰되지 않으면 FAIL이다. 입력 및 출력 AXIS의
+  VALID/data/keep/last 안정성 assertion과 byte/TLAST scoreboard를 함께 사용한다.
+- TCP 패킷 trace는 Scapy 2.6.1로 재검사한다. checker 자체도 정상/오염 checksum으로
+  self-test한다. TOE 출력 IPv4 checksum=0은 downstream MAC의 역할로 구분한다.
+
+log 이름에 profile/seed/target/stall/position/WS가 들어간다. 실패 시 같은 조건으로
+자동 재실행하여 외부 인터페이스 WDB와 trace log를 저장한다. 과거 실패 파형은
+회귀 통과 후에도 남을 수 있으며, 당시 코드/로그 기준으로 해석한다. XSim의 exit status만으로
+PASS를 판정하지 않고 SV PASS marker와 Scapy 결과를 모두 요구한다.
+
+## 참고 저장소 10개
+
+조회한 reference commit은 `cases/sources.json`에 고정했다. 아래 자료에서 검증
+시나리오와 model 패턴을 선별했으며, 외부 stack 자체를 DUT의 정답으로 실행하지 않는다.
+
+| 저장소 | 참고 지점 | 연결된 TB |
+|---|---|---|
+| [google/packetdrill](https://github.com/google/packetdrill) | packet/socket 이벤트 기반 검사 | ack, connection, active_open |
+| [torvalds/linux](https://github.com/torvalds/linux/tree/master/tools/testing/selftests/net/packetdrill) | basic client/server, close/disorder 테스트 | active_open, close, closed_port |
+| [lwip-tcpip/lwip](https://github.com/lwip-tcpip/lwip/blob/master/test/unit/tcp/test_tcp.c) | sequence wrap와 TCP 단위 테스트 | sequence_wrap, tx_sequence_wrap |
+| [smoltcp-rs/smoltcp](https://github.com/smoltcp-rs/smoltcp/blob/main/src/socket/tcp.rs) | TCP 상태·sequence/window 처리 모델 | ack, reorder, connection |
+| [google/gvisor](https://github.com/google/gvisor) | TCP e2e helper의 분할 전송·byte 검사 | multisession, backpressure의 byte scoreboard |
+| [nsnam/ns-3-dev-git](https://github.com/nsnam/ns-3-dev-git/blob/master/src/internet/doc/tcp.rst) | zero-window, retransmit, timer/close 검사 | timers, close 및 기존 flow/full 회귀 |
+| [secdev/scapy](https://github.com/secdev/scapy/blob/master/test/scapy/layers/inet.uts) | checksum, TCP options/data offset 검사 | errors, options, malformed_options; 실제 packet oracle |
+| [alexforencich/cocotbext-axi](https://github.com/alexforencich/cocotbext-axi) | source/sink/monitor와 pause 패턴 | backpressure의 구동/수신 분리 |
+| [alexforencich/verilog-axis](https://github.com/alexforencich/verilog-axis/blob/master/tb/axis_fifo/test_axis_fifo.py) | frame 길이, pause/stress/overflow 검사 | backpressure의 frame 경계·stall coverage |
+| [fpgasystems/fpga-network-stack](https://github.com/fpgasystems/fpga-network-stack/blob/master/hls/toe/toe_tb.cpp) | TOE API와 기존 모델 | 공통 top/interface binding; 동일 계열이므로 독립 oracle 아님 |
+
+RX bypass에서는 OOO 재조립을 요구하지 않고 드롭 후 재전송 복구를 검사한다.
+SACK/Timestamp/ECN, 동적 peer-MSS 적용, IPv4 옵션/fragment/IP checksum 선별,
+실제 RTO 시간과 physical place-and-route는 이번 추가 검증의 PASS 범위에 포함하지 않는다.

@@ -194,7 +194,7 @@ void tasi_pkg_pusher(hls::stream<mmCmd>&					tasi_meta2pkgPushCmd,
 		}
 		else
 		{
-			sendWord.keep = lenToKeep(remainingLength);
+			sendWord.keep = toeLenToKeep<WIDTH>(remainingLength);
 			sendWord.last = 1;
 
 			cmd.saddr(WINDOW_BITS-1, 0) = 0;
@@ -230,7 +230,7 @@ void tasi_pkg_pusher(hls::stream<mmCmd>&					tasi_meta2pkgPushCmd,
 		{
 			net_axis<WIDTH> currWord = appTxDataIn.read();
 			net_axis<WIDTH> sendWord;
-			sendWord = alignWords<WIDTH>(offset, prevWord, currWord);
+			sendWord = toeAlignWords<WIDTH>(offset, prevWord, currWord);
 			sendWord.last = (currWord.keep[offset] == 0);
 
 			txBufferWriteData.write(sendWord);
@@ -251,8 +251,8 @@ void tasi_pkg_pusher(hls::stream<mmCmd>&					tasi_meta2pkgPushCmd,
 #ifndef __SYNTHESIS__
 		sendWord.data(WIDTH-1, WIDTH - (offset*8)) = 0;
 #endif
-		net_axis<WIDTH> emptyWord;
-		sendWord = alignWords<WIDTH>(offset, prevWord, emptyWord);
+		net_axis<WIDTH> emptyWord(0, 0, 0);
+		sendWord = toeAlignWords<WIDTH>(offset, prevWord, emptyWord);
 		sendWord.last = 1;
 		txBufferWriteData.write(sendWord);
 		tasiPkgPushState = IDLE;

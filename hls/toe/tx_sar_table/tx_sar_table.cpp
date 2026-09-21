@@ -118,7 +118,7 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 			}
 #else
 			ap_uint<4> win_shift = entry.win_shift;
-			ap_uint<30> scaled_recv_window;
+			ap_uint<30> scaled_recv_window = 0;
 			scaled_recv_window(win_shift+15, win_shift) = entry.recv_window;
 			if (entry.cong_window < scaled_recv_window)
 			{
@@ -134,20 +134,28 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 			{
 				usableWindow = minWindow - usedLength;
 			}
+			// FIN consumes sequence space but has no byte in the TX buffer.
+			ap_int<32> uncommitted = entry.not_ackd - entry.app;
+			bool writesPending = uncommitted > (entry.finSent ? 1 : 0);
 			txSar2txEng_upd_rsp.write(txTxSarReply(	entry.ackd,
 													entry.not_ackd,
 													usableWindow, //minWindow,
 													entry.app,
 													usedLength,
 													entry.finReady,
-													entry.finSent));
+													entry.finSent, writesPending));
 		}
 	}
 	// TX App Stream If
 	else if (!txApp2txSar_app_push.empty()) //write only
 	{
 	 	txAppTxSarPush push = txApp2txSar_app_push.read();
-		tx_table[push.sessionID].app = push.app;
+		// Statuses are ordered; each application write is shorter than BUFFER_SIZE.
+		ap_uint<32> previous = tx_table[push.sessionID].app;
+		ap_uint<32> committed = previous;
+		committed(WINDOW_BITS-1, 0) = push.app;
+		if (push.app < previous(WINDOW_BITS-1, 0)) committed += BUFFER_SIZE;
+		tx_table[push.sessionID].app = committed;
 	}
 	// RX Engine
 	else if (!rxEng2txSar_upd_req.empty())
@@ -178,7 +186,7 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 #else
 
 #if (WINDOW_SCALE)
-			ap_uint<30> scaled_recv_window;
+			ap_uint<30> scaled_recv_window = 0;
 			scaled_recv_window(win_shift+15, win_shift) = tst_rxEngUpdate.recv_window;
 #else
 			ap_uint<30> scaled_recv_window = tst_rxEngUpdate.recv_window;

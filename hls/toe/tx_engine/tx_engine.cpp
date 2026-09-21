@@ -75,6 +75,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 #pragma HLS pipeline II=1
 
 	static ap_uint<1> ml_FsmState = 0;
+	static bool ml_retryDelay = false;
 	static bool ml_sarLoaded = false;
 	static extendedEvent ml_curEvent;
 	static ap_uint<32> ml_randomValue= 0x562301af; //Random seed initialization
@@ -85,6 +86,9 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 	ap_uint<WINDOW_BITS> slowstart_threshold;
 	static tx_engine_meta meta;
 	rstEvent resetEvent;
+
+	// Leave a query-free cycle so the SAR table can consume write completions.
+	if (ml_retryDelay) { ml_retryDelay = false; return; }
 
 	switch (ml_FsmState)
 	{
@@ -341,6 +345,18 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				{
 					txSar = txSarReg;
 				}
+
+#if TCP_NODELAY
+				// Bypass TX can reach the wire while its buffer copy is still stalled.
+				// Poll the existing SAR interfaces until write completion is visible.
+				if (!ml_sarLoaded && txSar.usedLength != 0 && txSar.writesPending)
+				{
+					txEng2rxSar_req.write(ml_curEvent.sessionID);
+					txEng2txSar_upd_req.write(txTxSarQuery(ml_curEvent.sessionID));
+					ml_retryDelay = true;
+					break;
+				}
+#endif
 
 				//TODO use  usedLengthWithFIN
 				ap_uint<WINDOW_BITS> currLength = txSar.usedLength; //((ap_uint<WINDOW_BITS>) txSar.not_ackd - txSar.ackd);
@@ -1142,7 +1158,7 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 		// std::cout << std::endl;
 
 		//In case of WIDTH == 512, we can add the MSS option into the first word
-		if (isSYN && WIDTH == 512)
+		if (isSYN && WIDTH >= 512)
 		{
 			// MSS negotiation is only used in SYN packets
 			sendWord.data(263, 256) = 0x02; // Option Kind
@@ -1252,7 +1268,7 @@ void read_data_stitching(	hls::stream<bool>&			memAccessBreakdown2readPkgStitche
 			memAccessBreakdown2readPkgStitcher.read(pkgNeedsMerge);
 			net_axis<WIDTH> currWord = readDataIn.read();
 
-			offset = keepToLen(currWord.keep);
+			offset = toeKeepToLen<WIDTH>(currWord.keep);
 
 			//Check if packet has only 1 word
 			if (currWord.last)
@@ -1292,7 +1308,7 @@ void read_data_stitching(	hls::stream<bool>&			memAccessBreakdown2readPkgStitche
 		if (!readDataIn.empty())
 		{
 			net_axis<WIDTH> currWord = readDataIn.read();
-			offset = keepToLen(currWord.keep);
+			offset = toeKeepToLen<WIDTH>(currWord.keep);
 
 			//Check if end of packet
 			if (currWord.last)
