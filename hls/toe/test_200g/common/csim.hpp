@@ -35,6 +35,9 @@ static void send(stream<Axis> &s,const Bytes &b) {
 }
 static void append(Bytes &b,const Axis &a) {for(unsigned j=0;j<DATA_WIDTH/8;j++) if(a.keep[j]) b.push_back(a.data(j*8+7,j*8));}
 struct Bench {
+#ifdef V80_RUNTIME_MSS
+ ap_uint<16> max_mss=TCP_MSS;
+#endif
  stream<Axis> ipRx,rxRead,txRead,ipTx,rxWrite,txWrite,appTx,appRx;
  stream<mmStatus> txStatus; stream<mmCmd> txWC,txRC;
  stream<rtlSessionLookupReply> lr;stream<rtlSessionUpdateReply> ur;
@@ -47,7 +50,11 @@ struct Bench {
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
  Bytes out,received,expectedTx;unsigned txPayload=0;bool fin=false;
  void tick() {
-  toe(ipRx,txStatus,rxRead,txRead,ipTx,txWC,txRC,rxWrite,txWrite,lr,ur,lq,uq,listen,read,open,close,txMeta,appTx,listened,notices,rxMeta,appRx,opened,txRsp,ap_uint<16>(fifo.size()),ap_uint<16>(8192),0x0100000a,count);
+  toe(ipRx,txStatus,rxRead,txRead,ipTx,txWC,txRC,rxWrite,txWrite,lr,ur,lq,uq,listen,read,open,close,txMeta,appTx,listened,notices,rxMeta,appRx,opened,txRsp,ap_uint<16>(fifo.size()),ap_uint<16>(8192),0x0100000a,count
+#ifdef V80_RUNTIME_MSS
+,max_mss
+#endif
+);
   cycles++;
   if(cycles%delay==0 && !lq.empty()) {auto q=lq.read();auto it=table.find(q.key);rtlSessionLookupReply r(it!=table.end(),it==table.end()?0:it->second,q.source);r.key=q.key;lr.write(r);}
   if(cycles%delay==0 && !uq.empty()) {auto q=uq.read();if(q.op==INSERT)table[q.key]=q.value;else table.erase(q.key);rtlSessionUpdateReply r(q.value,q.op,q.source);r.key=q.key;r.success=true;ur.write(r);}

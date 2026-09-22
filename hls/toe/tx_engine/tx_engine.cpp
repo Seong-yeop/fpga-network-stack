@@ -69,8 +69,17 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				hls::stream<bool>&						txEng_isDDRbypass,
 #endif
 				hls::stream<fourTuple>&					txEng_tupleShortCutFifoOut,
-				hls::stream<ap_uint<1> >&				readCountFifo)
+				hls::stream<ap_uint<1> >&				readCountFifo
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+)
 {
+#ifdef V80_RUNTIME_MSS
+    const ap_uint<16> segmentMss = maxSegmentSize;
+#else
+    const ap_uint<16> segmentMss = MSS;
+#endif
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
 
@@ -241,11 +250,11 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				//precomputed in txSar Table: usableWindow = (min(recv_window, cong_windwo) < usedLength ? (min(recv_window, cong_window) - usedLength) : 0)
 				if (currLength <= txSar.usableWindow)
 				{
-					if (currLength >= MSS) //TODO change to >= MSS, use maxSegmentCount
+					if (currLength >= segmentMss) //TODO change to >= segmentMss, use maxSegmentCount
 					{
 						// We stay in this state and sent immediately another packet
-						txSar.not_ackd += MSS;
-						meta.length = MSS;
+						txSar.not_ackd += segmentMss;
+						meta.length = segmentMss;
 					}
 					else
 					{
@@ -279,15 +288,15 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				else
 				{
 					// code duplication, but better timing..
-					if (txSar.usableWindow >= MSS)
+					if (txSar.usableWindow >= segmentMss)
 					{
 						// We stay in this state and sent immediately another packet
-						txSar.not_ackd += MSS;
-						meta.length = MSS;
+						txSar.not_ackd += segmentMss;
+						meta.length = segmentMss;
 					}
 					else
 					{
-						// Check if we sent >= MSS data
+						// Check if we sent >= segmentMss data
 //#if !(TCP_NODELAY)
 						if (txSar.ackd == txSar.not_ackd)
 //#endif
@@ -378,13 +387,13 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				// Decrease Slow Start Threshold, only on first RT from retransmitTimer
 				if (!ml_sarLoaded && (ml_curEvent.rt_count == 1))
 				{
-					if (currLength > (4*MSS)) // max( FlightSize/2, 2*MSS) RFC:5681
+					if (currLength > (4*segmentMss)) // max( FlightSize/2, 2*segmentMss) RFC:5681
 					{
 						slowstart_threshold = currLength/2;
 					}
 					else
 					{
-						slowstart_threshold = (2 * MSS);
+						slowstart_threshold = (2 * segmentMss);
 					}
 					txEng2txSar_upd_req.write(txTxSarRtQuery(ml_curEvent.sessionID, slowstart_threshold));
 				}
@@ -393,12 +402,12 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				// Since we are retransmitting from txSar.ackd to txSar.not_ackd, this data is already inside the usableWindow
 				// => no check is required
 				// Only check if length is bigger than MMS
-				if (currLength > MSS)
+				if (currLength > segmentMss)
 				{
 					// We stay in this state and sent immediately another packet
-					meta.length = MSS;
-					txSar.ackd += MSS;
-					txSar.usedLength -= MSS;
+					meta.length = segmentMss;
+					txSar.ackd += segmentMss;
+					txSar.usedLength -= segmentMss;
 					// TODO replace with dynamic count, remove this
 					if (ml_segmentCount == 3)
 					{
@@ -1640,7 +1649,11 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 				stream<mmCmd>&					txBufferReadCmd,
 				stream<ap_uint<16> >&			txEng2sLookup_rev_req,
 				stream<net_axis<WIDTH> >&				ipTxData,
-				stream<ap_uint<1> >&			readCountFifo)
+				stream<ap_uint<1> >&			readCountFifo
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+)
 {
 // #pragma HLS DATAFLOW
 #pragma HLS INTERFACE ap_ctrl_none port=return
@@ -1732,7 +1745,11 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 				txEng_isDDRbypass,
 #endif
 				txEng_tupleShortCutFifo,
-				readCountFifo);
+				readCountFifo
+#ifdef V80_RUNTIME_MSS
+, maxSegmentSize
+#endif
+);
 
 	txEngMemAccessBreakdown(txMetaloader2memAccessBreakdown, txBufferReadCmd, memAccessBreakdown2txPkgStitcher);
 
@@ -1788,4 +1805,8 @@ template void tx_engine<DATA_WIDTH>(	stream<extendedEvent>&			eventEng2txEng_eve
 				stream<mmCmd>&					txBufferReadCmd,
 				stream<ap_uint<16> >&			txEng2sLookup_rev_req,
 				stream<net_axis<DATA_WIDTH> >&				ipTxData,
-				stream<ap_uint<1> >&			readCountFifo);
+				stream<ap_uint<1> >&			readCountFifo
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+);

@@ -29,14 +29,7 @@
 #include "../axi_utils.hpp"
 #include "../fns_config.hpp"
 
-struct arpTableReply
-{
-	ap_uint<48>	macAddress;
-	bool		hit;
-	arpTableReply() {}
-	arpTableReply(ap_uint<48> macAdd, bool hit)
-			:macAddress(macAdd), hit(hit) {}
-};
+#include "../arp_server_subnet/arp_server_subnet.hpp"
 
 template <int WIDTH>
 void mac_ip_encode_core( hls::stream<net_axis<WIDTH> >&			dataIn,

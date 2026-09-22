@@ -229,110 +229,32 @@ void ip_invalid_dropper(hls::stream<net_axis<WIDTH> >&		dataIn,
 	} // switch
 }
 
+// Trim Ethernet padding at any stream width, including a one-beat IPv4 packet.
 template <int WIDTH>
-void cut_length(hls::stream<net_axis<WIDTH> > &dataIn, hls::stream<net_axis<WIDTH> > &dataOut)
+void cut_length(hls::stream<net_axis<WIDTH> >& dataIn, hls::stream<net_axis<WIDTH> >& dataOut)
 {
-	#pragma HLS PIPELINE II=1
-	#pragma HLS INLINE off
-
-	enum cl_stateType {PKG, DROP};
-	static cl_stateType cl_state = PKG;
-	static ap_uint<16> cl_wordCount = 0;
-	static ap_uint<16> cl_totalLength = 0;
-
-	net_axis<WIDTH> currWord;
-	ap_uint<4> leftLength = 0;
-
-	switch (cl_state)
-	{
-	case PKG:
-		if (!dataIn.empty())
-		{
-			dataIn.read(currWord);
-
-			switch (cl_wordCount)
-			{
-			case 0:
-				cl_totalLength(7, 0) = currWord.data(31, 24);
-				cl_totalLength(15, 8) = currWord.data(23, 16);
-				break;
-			default:
-				if (((cl_wordCount+1)*8) >= cl_totalLength) //last real world
-				{
-					if (currWord.last == 0)
-					{
-						cl_state = DROP;
-					}
-					currWord.last = 1;
-					leftLength = cl_totalLength - (cl_wordCount*8);
-					currWord.keep = lenToKeep(leftLength);
-				}
-				break;
-			}
-			dataOut.write(currWord);
-			cl_wordCount++;
-			if (currWord.last)
-			{
-				cl_wordCount = 0;
-			}
-		} //emtpy
-		break;
-	case DROP:
-		if (!dataIn.empty())
-		{
-			dataIn.read(currWord);
-			if (currWord.last)
-			{
-				cl_state = PKG;
-			}
-		}
-		break;
-	} //switch
-}
-
-void cut_length(hls::stream<net_axis<512> > &dataIn, hls::stream<net_axis<512> > &dataOut)
-{
-	#pragma HLS PIPELINE II=1
-	#pragma HLS INLINE off
-
-	enum cl_stateType {FIRST, REST};
-	static cl_stateType cl_state = FIRST;
-
-	switch (cl_state)
-	{
-	case FIRST:
-		if (!dataIn.empty())
-		{
-			net_axis<512> currWord = dataIn.read();
-
-
-			ap_uint<16> totalLength;
-			totalLength(7, 0) = currWord.data(31, 24);
-			totalLength(15, 8) = currWord.data(23, 16);
-
-			if (currWord.last)
-			{
-				currWord.keep = lenToKeep(totalLength);
-			}
-			else
-			{
-				cl_state = REST;
-			}
-			dataOut.write(currWord);
-		} //emtpy
-		break;
-	case REST:
-		if (!dataIn.empty())
-		{
-			net_axis<512> currWord = dataIn.read();
-			dataOut.write(currWord);
-			if (currWord.last)
-			{
-				cl_state = FIRST;
-			}
-		}
-		break;
-	} //switch
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+    static ap_uint<16> remaining = 0;
+    static bool first = true, dropping = false;
+    if (!dataIn.empty()) {
+        net_axis<WIDTH> word = dataIn.read();
+        const bool physicalLast = word.last;
+        if (!dropping) {
+            if (first) remaining = reverse(ap_uint<16>(word.data(31,16)));
+            if (remaining <= WIDTH/8) {
+                for (int i=0; i<WIDTH/8; ++i) {
+#pragma HLS UNROLL
+                    word.keep[i] = word.keep[i] && i < remaining;
+                }
+                word.last = 1;
+                dropping = !physicalLast;
+            } else remaining -= WIDTH/8;
+            dataOut.write(word);
+        }
+        first = physicalLast;
+        if (physicalLast) dropping = false;
+    }
 }
 
 

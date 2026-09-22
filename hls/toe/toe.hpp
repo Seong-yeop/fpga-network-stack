@@ -213,7 +213,11 @@ void toe_core(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount);
+			ap_uint<16>&							regSessionCount
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+);
 
 
 #endif

@@ -53,6 +53,7 @@ void process_arp_pkg(	hls::stream<net_axis<WIDTH> >&		dataIn,
 			{
 				if (header.isRequest())
 				{
+					arpTableInsertFifo.write(arpTableEntry(header.getSenderProtoAddr(), header.getSenderHwAddr(), true));
 					// Trigger ARP reply
 					arpReplyMetaFifo.write(arpReplyMeta(header.getSrcMacAddr(), header.getSenderHwAddr(), header.getSenderProtoAddr()));
 					pag_requestCounter++;

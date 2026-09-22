@@ -366,6 +366,39 @@ void ip_handler_compute_ipv4_checksum(	hls::stream<net_axis<512> >&	dataIn,
 
 //A hack to Vitis working flow
 //In vitis, module with same name used in different ips generates compile errors
+// Wide L2 paths: every IPv4 header (including options) fits in the first beat.
+template<int WIDTH, int INSTANCE>
+void wide_ipv4_checksum(hls::stream<net_axis<WIDTH> >& in,
+    hls::stream<net_axis<WIDTH> >& out, hls::stream<subSums<WIDTH/16> >& sums,
+    bool skip) {
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+    static bool first=true;
+    if (!in.empty()) {
+        net_axis<WIDTH> w=in.read();
+        if (first) {
+            subSums<WIDTH/16> s;
+            ap_uint<6> words=ap_uint<4>(w.data(3,0))*2;
+            for (int i=0;i<WIDTH/16;i++) {
+#pragma HLS UNROLL
+                s.sum[i]=(i<words && !(skip && i==5)) ? reverse(ap_uint<16>(w.data(i*16+15,i*16))) : ap_uint<16>(0);
+            }
+            sums.write(s);
+        }
+        first=w.last;out.write(w);
+    }
+}
+inline void mac_compute_ipv4_checksum(hls::stream<net_axis<1024> >& in,
+    hls::stream<net_axis<1024> >& out,hls::stream<subSums<64> >& sums,bool skip=false) {
+#pragma HLS INLINE
+    wide_ipv4_checksum<1024,0>(in,out,sums,skip);
+}
+inline void ip_handler_compute_ipv4_checksum(hls::stream<net_axis<1024> >& in,
+    hls::stream<net_axis<1024> >& out,hls::stream<subSums<64> >& sums) {
+#pragma HLS INLINE
+    wide_ipv4_checksum<1024,1>(in,out,sums,false);
+}
+
 template <int N>
 void toe_check_ipv4_checksum(	hls::stream<subSums<N> >&	subSumFiFoIn,
 							hls::stream<bool>&			checkSumFifoOut)

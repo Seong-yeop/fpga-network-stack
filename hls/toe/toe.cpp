@@ -487,7 +487,11 @@ void toe_core(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount)
+			ap_uint<16>&							regSessionCount
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+)
 {
 	#pragma HLS INLINE
 
@@ -776,7 +780,11 @@ void toe_core(	// Data & Memory Interface
 				txBufferReadCmd,
 				txEng2sLookup_rev_req,
 				ipTxData,
-				txEngFifoReadCount);
+				txEngFifoReadCount
+#ifdef V80_RUNTIME_MSS
+, maxSegmentSize
+#endif
+);
 
 	/*
 	 * Application Interfaces
@@ -876,10 +884,17 @@ void toe(	// Data & Memory Interface
 			//IP Address Input
 			ap_uint<32>								myIpAddress,
 			//statistic
-			ap_uint<16>&							regSessionCount)
+			ap_uint<16>&							regSessionCount
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+)
 {
 #pragma HLS DATAFLOW disable_start_propagation
 #pragma HLS INTERFACE ap_ctrl_none port=return
+#ifdef V80_RUNTIME_MSS
+#pragma HLS INTERFACE ap_none port=maxSegmentSize
+#endif
 
 	/*
 	 * PRAGMAs
@@ -1039,5 +1054,9 @@ void toe(	// Data & Memory Interface
 					axis_max_data_count,
 #endif
 					myIpAddress,
-					regSessionCount);
+					regSessionCount
+#ifdef V80_RUNTIME_MSS
+, maxSegmentSize
+#endif
+);
 }
