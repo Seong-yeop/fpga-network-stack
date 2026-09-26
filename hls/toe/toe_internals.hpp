@@ -124,6 +124,9 @@ struct rxSarEntry
 	ap_uint<32> head;
 	ap_uint<32> offset;
 	bool gap;
+#ifdef V80_RX_MEM_NO_SPLIT
+	ap_uint<WINDOW_BITS> released;
+#endif
 };
 
 struct rxSarReply

@@ -45,21 +45,41 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true;unsigned delay=1, openReplies=0, writePauseUntil=0, readCommands=0;std::deque<Bytes> packets;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0;std::deque<Bytes> packets;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
+#if !(RX_DDR_BYPASS)
+ stream<mmStatus> rxStatus; stream<mmCmd> rxWC,rxRC; std::map<unsigned,unsigned char> rxmem; std::deque<mmCmd> rxWrites,rxReads; unsigned rwo=0,rro=0; std::deque<std::pair<unsigned,mmStatus>> rxStatusQ;
+ static unsigned ring(unsigned base,unsigned i){return (base&~(BUFFER_SIZE-1))|((base+i)&(BUFFER_SIZE-1));}
+#endif
  Bytes out,received,expectedTx;unsigned txPayload=0;bool fin=false;
  void tick() {
+#if RX_DDR_BYPASS
   toe(ipRx,txStatus,rxRead,txRead,ipTx,txWC,txRC,rxWrite,txWrite,lr,ur,lq,uq,listen,read,open,close,txMeta,appTx,listened,notices,rxMeta,appRx,opened,txRsp,ap_uint<16>(fifo.size()),ap_uint<16>(8192),0x0100000a,count
 #ifdef V80_RUNTIME_MSS
 ,max_mss
 #endif
 );
+#else
+  toe(ipRx,rxStatus,txStatus,rxRead,txRead,ipTx,rxWC,rxRC,txWC,txRC,rxWrite,txWrite,lr,ur,lq,uq,listen,read,open,close,txMeta,appTx,listened,notices,rxMeta,appRx,opened,txRsp,0x0100000a,count
+#ifdef V80_RUNTIME_MSS
+,max_mss
+#endif
+);
+#endif
   cycles++;
   if(cycles%delay==0 && !lq.empty()) {auto q=lq.read();auto it=table.find(q.key);rtlSessionLookupReply r(it!=table.end(),it==table.end()?0:it->second,q.source);r.key=q.key;lr.write(r);}
   if(cycles%delay==0 && !uq.empty()) {auto q=uq.read();if(q.op==INSERT)table[q.key]=q.value;else table.erase(q.key);rtlSessionUpdateReply r(q.value,q.op,q.source);r.key=q.key;r.success=true;ur.write(r);}
+#if RX_DDR_BYPASS
   if(!rxWrite.empty()){check(fifo.size()<8192,"RX FIFO overflow");fifo.push_back(rxWrite.read());}
   if(!fifo.empty() && rxRead.empty()){rxRead.write(fifo.front());fifo.pop_front();}
+#else
+  if(!rxWC.empty())rxWrites.push_back(rxWC.read());
+  if(!rxWrites.empty()&&!rxWrite.empty()){auto a=rxWrite.read();unsigned base=rxWrites.front().saddr.to_uint();for(unsigned j=0;j<DATA_WIDTH/8;j++)if(a.keep[j])rxmem[ring(base,rwo++)]=a.data(j*8+7,j*8);if(a.last){check(rwo==rxWrites.front().bbt,"RX write length");rxWrites.pop_front();rwo=0;mmStatus s{};s.okay=1;rxStatusQ.push_back({cycles+8,s});}}
+  if(!rxStatusQ.empty()&&rxStatusQ.front().first<=cycles){rxStatus.write(rxStatusQ.front().second);rxStatusQ.pop_front();}
+  if(!rxRC.empty())rxReads.push_back(rxRC.read());
+  if(cycles>=readPauseUntil&&!rxReads.empty()&&rxRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=rxReads.front();unsigned base=c.saddr.to_uint();for(unsigned j=0;j<DATA_WIDTH/8&&rro<c.bbt;j++,rro++){a.data(j*8+7,j*8)=rxmem.at(ring(base,rro));a.keep[j]=1;}a.strb=a.keep;a.last=rro==c.bbt;rxRead.write(a);if(a.last){rxReads.pop_front();rro=0;}}
+#endif
   if(cycles%delay==0 && !notices.empty()){auto n=notices.read();sid=n.sessionID;if(n.length){read.write(appReadRequest(n.sessionID,n.length));pendingLengths.push_back(n.length);}}
   if(!rxMeta.empty()){rxMeta.read();check(!pendingLengths.empty(),"unexpected RX metadata");lengths.push_back(pendingLengths.front());pendingLengths.pop_front();}
   if(cycles%delay==0 && !appRx.empty()){auto a=appRx.read();check(!lengths.empty(),"missing RX metadata");unsigned before=received.size();append(received,a);unsigned bytes=received.size()-before;check(bytes<=lengths.front(),"RX request length exceeded");lengths.front()-=bytes;if(a.last){check(lengths.front()==0,"early RX TLAST");lengths.pop_front();}else check(lengths.front()!=0,"missing RX TLAST");}

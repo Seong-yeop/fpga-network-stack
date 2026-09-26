@@ -422,10 +422,18 @@ void processPseudoHeader(stream<net_axis<WIDTH> >&					dataIn,
 							stream<rxEngineMetaData>&		metaDataFifoOut,
 							stream<fourTuple>&				tupleFifoOut,
 							stream<ap_uint<16> >&			portTableOut,
-							stream<optionalFieldsMeta>&	ofMetaOut)
+							stream<optionalFieldsMeta>&	ofMetaOut
+#ifdef V80_RX_DEBUG
+							, ap_uint<32>&				dbgInvalid
+#endif
+							)
 {
 	#pragma HLS PIPELINE II=1
 	#pragma HLS INLINE off
+#ifdef V80_RX_DEBUG
+	static ap_uint<32> dbg_invalid = 0;	// packets dropped here: bad TCP checksum or impossible header
+	dbgInvalid = dbg_invalid;
+#endif
 
 	static tcpFullPseudoHeader<WIDTH>	header; //width: 256bit
 	static bool firstWord = true;
@@ -457,6 +465,9 @@ void processPseudoHeader(stream<net_axis<WIDTH> >&					dataIn,
 			{
 				pkgValid = pkgValid && header.getDataOffset() >= 5
 					&& header.getLength() >= (header.getDataOffset() * 4);
+#ifdef V80_RX_DEBUG
+				if (!pkgValid) dbg_invalid++;
+#endif
 			}
 
 			if (pkgValid && WIDTH > TCP_FULL_PSEUDO_HEADER_SIZE && ((header.getLength() - (header.getDataOffset() * 4) != 0 || (header.getDataOffset() > 5))))// && WIDTH == 512)
@@ -857,10 +868,19 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 						stream<sessionLookupQuery>&				rxEng2sLookup_req,
 						stream<extendedEvent>&					rxEng2eventEng_setEvent,
 						stream<bool>&							dropDataFifoOut,
-						stream<rxFsmMetaData>&					fsmMetaDataFifo)
+						stream<rxFsmMetaData>&					fsmMetaDataFifo
+#ifdef V80_RX_DEBUG
+						, ap_uint<64>&							dbgMeta
+#endif
+						)
 {
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
+#ifdef V80_RX_DEBUG
+	// data segments dropped because the port is closed [31:0] / the session lookup missed [63:32]
+	static ap_uint<32> dbg_port_closed = 0, dbg_lookup_miss = 0;
+	dbgMeta = (dbg_lookup_miss, dbg_port_closed);
+#endif
 
 	static rxEngineMetaData mh_meta;
 	static sessionLookupReply mh_lup;
@@ -914,6 +934,9 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 				if (mh_meta.length != 0)
 				{
 					dropDataFifoOut.write(true);
+#ifdef V80_RX_DEBUG
+					dbg_port_closed++;
+#endif
 				}
 			}
 			else
@@ -936,6 +959,9 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 			if (mh_meta.length != 0)
 			{
 				dropDataFifoOut.write(!mh_lup.hit);
+#ifdef V80_RX_DEBUG
+				if (!mh_lup.hit) dbg_lookup_miss++;
+#endif
 			}
 			/*if (!mh_lup.hit)
 			{
@@ -987,15 +1013,37 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						stream<bool>&							dropDataFifoOut,
 #if !(RX_DDR_BYPASS)
 						stream<mmCmd>&							rxBufferWriteCmd,
-						stream<appNotification>&				rxEng2rxApp_notification)
+						stream<appNotification>&				rxEng2rxApp_notification
 #else
 						stream<appNotification>&				rxEng2rxApp_notification,
 						ap_uint<16>						rxbuffer_data_count,
-						ap_uint<16>						rxbuffer_max_data_count)
+						ap_uint<16>						rxbuffer_max_data_count
 #endif
+#ifdef V80_RX_DEBUG
+						, ap_uint<192>&						dbgFsm
+						, ap_uint<192>&						dbgGap
+#endif
+						)
 {
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
+#ifdef V80_RX_DEBUG
+	// data segments: accepted [31:0], in order but <= 375 free FIFO entries [63:32], duplicate (seq < recvd)
+	// [95:64], beyond a gap (seq > recvd) [127:96], payload dropped in another state [159:128],
+	// RX FIFO occupancy at the last in-order drop [175:160]
+	static ap_uint<32> dbg_accept = 0, dbg_space = 0, dbg_dup = 0, dbg_gap = 0, dbg_state = 0;
+	static ap_uint<16> dbg_occupancy = 0;
+	dbgFsm = (ap_uint<16>(0), dbg_occupancy, dbg_state, dbg_gap, dbg_dup, dbg_space, dbg_accept);
+	// first "beyond a gap" rejection: its session [15:0], seq [47:16], the rx_sar recvd it was compared with
+	// [79:48], length [95:80]; the data segment accepted just before it: session [111:96], seq [143:112],
+	// length [159:144]; gap rejections seen [175:160]. seq == prev seq + prev len on the same session means an
+	// in-order segment was rejected against a stale recvd.
+	static ap_uint<16> dbg_gap_sid = 0, dbg_gap_len = 0, dbg_prev_sid = 0, dbg_prev_len = 0, dbg_gap_seen = 0;
+	static ap_uint<32> dbg_gap_seq = 0, dbg_gap_recvd = 0, dbg_prev_seq = 0;
+	static ap_uint<16> dbg_acc_sid = 0, dbg_acc_len = 0;
+	static ap_uint<32> dbg_acc_seq = 0;
+	dbgGap = (dbg_gap_seen, dbg_prev_len, dbg_prev_seq, dbg_prev_sid, dbg_gap_len, dbg_gap_recvd, dbg_gap_seq, dbg_gap_sid);
+#endif
 
 
 	enum fsmStateType {LOAD, TRANSITION};
@@ -1126,7 +1174,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 #if !(RX_DDR_BYPASS) //if enable DDR, OOO is enabled
 					// Check if packet contains payload
 					// Second part makes sure that app pointer is not overtaken
+#ifdef V80_RX_MEM_NO_SPLIT
+					ap_uint<WINDOW_BITS> free_space = ((rxSar.released - rxSar.head(WINDOW_BITS-1, 0)) - 1);
+#else
 					ap_uint<WINDOW_BITS> free_space = ((rxSar.appd - rxSar.head(WINDOW_BITS-1, 0)) - 1);
+#endif
 					
 					if (fsm_meta.meta.length != 0)
 					{
@@ -1137,127 +1189,83 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						pkgAddr(29, WINDOW_BITS) = fsm_meta.sessionID(13, 0);
 						pkgAddr(WINDOW_BITS-1, 0) = fsm_meta.meta.seqNumb(WINDOW_BITS-1, 0);
 
-						ap_uint<32> newRecvd = 0;
-						ap_uint<32> newHead = 0;
-						ap_uint<32> newOffset = 0;
-						// ### No gap, packet comes in order
-						if (!rxSar.gap && (fsm_meta.meta.seqNumb == rxSar.recvd) && (free_space > fsm_meta.meta.length))
+						ap_int<32> seqDiff = fsm_meta.meta.seqNumb - rxSar.recvd;
+						ap_uint<32> segEnd = fsm_meta.meta.seqNumb + fsm_meta.meta.length;
+						ap_int<32> endToOffset = segEnd - rxSar.offset;
+						ap_int<32> endToHead = segEnd - rxSar.head;
+						bool stored = false;
+						if (!rxSar.gap && seqDiff == 0 && free_space > fsm_meta.meta.length)
 						{
-							std::cout<<"RX_ACK: no gap in order";
-							std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
-							std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
-							std::cout<<" recvd:"<<rxSar.recvd;
-							std::cout<<" head:"<<rxSar.head;
-							std::cout<<" offset:"<<rxSar.offset;
-							std::cout<<" length:"<<fsm_meta.meta.length;							
-							std::cout<<" gap:"<<rxSar.gap;
-							std::cout<<" free_space:"<<free_space<<std::endl;
-							//increment both head and recvd pointers
-							newRecvd = fsm_meta.meta.seqNumb+fsm_meta.meta.length;
-							newHead = fsm_meta.meta.seqNumb+fsm_meta.meta.length;
-							//update head and recvd pointers
-							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, newRecvd, newHead, rxSar.offset, rxSar.gap));
-							//write to memory
-							rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
-							// Notify app length bytes available
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, segEnd, rxSar.offset, rxSar.gap));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
-							dropDataFifoOut.write(false);
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_accept++;
+							dbg_acc_sid = fsm_meta.sessionID; dbg_acc_seq = fsm_meta.meta.seqNumb; dbg_acc_len = fsm_meta.meta.length;
+#endif
 						}
-						// ### No gap, packet comes out-of-order
-						else if (!rxSar.gap && (fsm_meta.meta.seqNumb > rxSar.recvd) && (free_space > (fsm_meta.meta.seqNumb+fsm_meta.meta.length- rxSar.head)(WINDOW_BITS-1, 0)))
+						else if (!rxSar.gap && seqDiff > 0 && endToHead < (ap_int<32>)free_space)
 						{
-							std::cout<<"RX_ACK: no gap ooo";
-							std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
-							std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
-							std::cout<<" recvd:"<<rxSar.recvd;
-							std::cout<<" head:"<<rxSar.head;
-							std::cout<<" offset:"<<rxSar.offset;
-							std::cout<<" length:"<<fsm_meta.meta.length;							
-							std::cout<<" gap:"<<rxSar.gap;
-							std::cout<<" free_space:"<<free_space<<std::endl;
-							//increment head pointer, set offset to ooo sequence number
-							newHead = fsm_meta.meta.seqNumb+fsm_meta.meta.length;
-							newOffset = fsm_meta.meta.seqNumb;
-							//update head and offset pointer, set gap to true
-							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, newHead, newOffset, true));
-							//notification for matching the mem write status in notificationDelayer
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, segEnd, fsm_meta.meta.seqNumb, true));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, 0, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
-							//write to memory
-							rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
-							dropDataFifoOut.write(false);
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_space++;
+#endif
 						}
-						// ### Gap already exists, packet comes in-order after the head pointer
-						else if (rxSar.gap && (fsm_meta.meta.seqNumb == rxSar.head) && (free_space > fsm_meta.meta.length)  )
+						else if (rxSar.gap && fsm_meta.meta.seqNumb == rxSar.head && free_space > fsm_meta.meta.length)
 						{
-							std::cout<<"RX_ACK: gap in order after head";
-							std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
-							std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
-							std::cout<<" recvd:"<<rxSar.recvd;
-							std::cout<<" head:"<<rxSar.head;
-							std::cout<<" offset:"<<rxSar.offset;
-							std::cout<<" length:"<<fsm_meta.meta.length;		
-							std::cout<<" gap:"<<rxSar.gap;
-							std::cout<<" free_space:"<<free_space<<std::endl;
-							//increment head pointer
-							newHead = fsm_meta.meta.seqNumb+fsm_meta.meta.length;
-							//update head pointer
-							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, newHead, rxSar.offset, rxSar.gap));
-							//write to memory
-							rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
-							//notification for matching the mem write status in notificationDelayer
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, segEnd, rxSar.offset, rxSar.gap));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, 0, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
-							dropDataFifoOut.write(false);
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_space++;
+#endif
 						}
-						// ### Gap alread exists, packet comes in-order after the recvd pointer
-						else if (rxSar.gap && (fsm_meta.meta.seqNumb == rxSar.recvd))
+						else if (rxSar.gap && seqDiff == 0 && endToOffset < 0)
 						{
-							std::cout<<"RX_ACK: gap in order after recvd";
-							std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
-							std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
-							std::cout<<" recvd:"<<rxSar.recvd;
-							std::cout<<" head:"<<rxSar.head;
-							std::cout<<" offset:"<<rxSar.offset;
-							std::cout<<" length:"<<fsm_meta.meta.length;		
-							std::cout<<" gap:"<<rxSar.gap;
-							std::cout<<" free_space:"<<free_space<<std::endl;
-							//fill the gap
-							if ((fsm_meta.meta.seqNumb + fsm_meta.meta.length) == rxSar.offset)
-							{
-								newRecvd = rxSar.head;
-								rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, newRecvd, rxSar.head, rxSar.offset, false));
-								//write to memory
-								rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
-								// Only notify about  new data available
-								rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, (rxSar.head - fsm_meta.meta.seqNumb)(WINDOW_BITS-1, 0), fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
-								dropDataFifoOut.write(false);
-							}
-							//gap can not be filled
-							else if ((fsm_meta.meta.seqNumb + fsm_meta.meta.length) < rxSar.offset)
-							{
-								newRecvd = fsm_meta.meta.seqNumb + fsm_meta.meta.length;
-								rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, newRecvd, rxSar.head, rxSar.offset, rxSar.gap));
-								//write to memory
-								rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
-								// Only notify about  new data available
-								rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
-								dropDataFifoOut.write(false);
-							}
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, rxSar.head, rxSar.offset, rxSar.gap));
+							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_accept++;
+#endif
 						}
-						// ### drop the packet in all other cases 
-						else 
+						else if (rxSar.gap && seqDiff == 0 && endToHead <= 0)
 						{
-							dropDataFifoOut.write(true);
-							std::cout<<"RX_DROP";
-							std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
-							std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
-							std::cout<<" recvd:"<<rxSar.recvd;
-							std::cout<<" head:"<<rxSar.head;
-							std::cout<<" offset:"<<rxSar.offset;
-							std::cout<<" length:"<<fsm_meta.meta.length;		
-							std::cout<<" gap:"<<rxSar.gap;
-							std::cout<<" free_space:"<<free_space<<std::endl;
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.head, rxSar.head, rxSar.offset, false));
+							rxEng2rxApp_notification.write(appNotification::gapFill(fsm_meta.sessionID, (ap_uint<19>)(rxSar.head - fsm_meta.meta.seqNumb), fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_occupancy++;
+#endif
 						}
-
+						else if (rxSar.gap && seqDiff == 0 && endToHead < (ap_int<32>)free_space)
+						{
+							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, segEnd, rxSar.offset, false));
+							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
+							stored = true;
+#ifdef V80_RX_DEBUG
+							dbg_occupancy++;
+#endif
+						}
+#ifdef V80_RX_DEBUG
+						else if (seqDiff < 0)
+							dbg_dup++;
+						else
+						{
+							dbg_gap++;
+							if (dbg_gap_seen == 0)
+							{
+								dbg_gap_sid = fsm_meta.sessionID; dbg_gap_seq = fsm_meta.meta.seqNumb; dbg_gap_recvd = rxSar.recvd; dbg_gap_len = fsm_meta.meta.length;
+								dbg_prev_sid = dbg_acc_sid; dbg_prev_seq = dbg_acc_seq; dbg_prev_len = dbg_acc_len;
+							}
+							if (dbg_gap_seen != 0xFFFF) dbg_gap_seen++;
+						}
+#endif
+						if (stored)
+							rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
+						dropDataFifoOut.write(!stored);
 					}
 
 
@@ -1269,6 +1277,30 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_uint<32> newHead = fsm_meta.meta.seqNumb+fsm_meta.meta.length;
 						// Second part makes sure that app pointer is not overtaken
 						// Check if segment in order and if enough free space is available
+#ifdef V80_RX_DEBUG
+						if ((fsm_meta.meta.seqNumb == rxSar.recvd) && ((rxbuffer_max_data_count - rxbuffer_data_count) > 375))
+						{
+							dbg_accept++;
+							dbg_acc_sid = fsm_meta.sessionID; dbg_acc_seq = fsm_meta.meta.seqNumb; dbg_acc_len = fsm_meta.meta.length;
+						}
+						else if (fsm_meta.meta.seqNumb == rxSar.recvd)
+						{
+							dbg_space++;
+							dbg_occupancy = rxbuffer_data_count;
+						}
+						else if (ap_int<32>(fsm_meta.meta.seqNumb - rxSar.recvd) < 0)
+							dbg_dup++;
+						else
+						{
+							dbg_gap++;
+							if (dbg_gap_seen == 0)
+							{
+								dbg_gap_sid = fsm_meta.sessionID; dbg_gap_seq = fsm_meta.meta.seqNumb; dbg_gap_recvd = rxSar.recvd; dbg_gap_len = fsm_meta.meta.length;
+								dbg_prev_sid = dbg_acc_sid; dbg_prev_seq = dbg_acc_seq; dbg_prev_len = dbg_acc_len;
+							}
+							if (dbg_gap_seen != 0xFFFF) dbg_gap_seen++;
+						}
+#endif
 						if ((fsm_meta.meta.seqNumb == rxSar.recvd) && ((rxbuffer_max_data_count - rxbuffer_data_count) > 375))
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, newRecvd, newHead, rxSar.offset, rxSar.gap));
@@ -1547,6 +1579,9 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					if (fsm_meta.meta.length != 0)
 					{
 						dropDataFifoOut.write(true);
+#ifdef V80_RX_DEBUG
+						dbg_state++;
+#endif
 					}
 				}
 			}
@@ -1704,16 +1739,29 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 	static ap_uint<5>		rand_fifoCount = 0;
 	static mmStatus			rxAppNotificationStatus1, rxAppNotificationStatus2;
 	static appNotification	rxAppNotification;
+	static ap_uint<3>		split_left = 0;
+	static appNotification	split_note;
 
-	if (rxAppNotificationDoubleAccessFlag == true) {
+	if (split_left != 0) {
+		if (!notificationOut.full()) {
+			split_note.length = 65528;
+			notificationOut.write(split_note);
+			split_left--;
+		}
+	}
+	else if (rxAppNotificationDoubleAccessFlag == true) {
 		if(!rxWriteStatusIn.empty()) {
 			rxWriteStatusIn.read(rxAppNotificationStatus2);
 			rand_fifoCount--;
 			if (rxAppNotificationStatus1.okay && rxAppNotificationStatus2.okay)
+			{
 				if (rxAppNotification.length != 0)
 				{
 					notificationOut.write(rxAppNotification);
 				}
+				split_left = rxAppNotification.extra;
+				split_note = rxAppNotification;
+			}
 			rxAppNotificationDoubleAccessFlag = false;
 		}
 	}
@@ -1725,10 +1773,14 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 			if (rxAppNotificationDoubleAccessFlag == 0) {				// if the memory access was not broken down in two for this segment
 				rand_fifoCount--;
 				if (rxAppNotificationStatus1.okay)
+				{
 					if (rxAppNotification.length!=0)
 					{
 						notificationOut.write(rxAppNotification);				// Output the notification
 					}
+					split_left = rxAppNotification.extra;
+					split_note = rxAppNotification;
+				}
 			}
 			//TODO else, we are screwed since the ACK is already sent
 		}
@@ -1959,11 +2011,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification)
+				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS)
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,
-				ap_uint<16>					rxbuffer_max_data_count)
+				ap_uint<16>					rxbuffer_max_data_count V80_RX_DEBUG_ARGS)
 #endif
 {
 //#pragma HLS DATAFLOW
@@ -2093,7 +2145,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 #endif
 								rxEng_tupleBuffer,
 								rxEng2portTable_req,
-								rxEng_optionalFieldsMetaFifo);
+								rxEng_optionalFieldsMetaFifo
+#ifdef V80_RX_DEBUG
+								, dbgRxHeader
+#endif
+								);
 
 	rshiftWordByOctet<net_axis<WIDTH>, WIDTH, 3>(((TCP_FULL_PSEUDO_HEADER_SIZE%WIDTH)/8), rxEng_dataBuffer3a, rxEng_dataBuffer3b);
 
@@ -2118,7 +2174,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 						rxEng2sLookup_req,
 						rxEng_metaHandlerEventFifo,
 						rxEng_metaHandlerDropFifo,
-						rxEng_fsmMetaDataFifo);
+						rxEng_fsmMetaDataFifo
+#ifdef V80_RX_DEBUG
+						, dbgRxMeta
+#endif
+						);
 
 	rxTcpFSM(			rxEng_fsmMetaDataFifo,
 							stateTable2rxEng_upd_rsp,
@@ -2135,12 +2195,17 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 							rxEng_fsmDropFifo,
 #if !(RX_DDR_BYPASS)
 							rxTcpFsm2wrAccessBreakdown,
-							rx_internalNotificationFifo);
+							rx_internalNotificationFifo
 #else
 							rxEng2rxApp_notification,
 							rxbuffer_data_count,
-							rxbuffer_max_data_count);
+							rxbuffer_max_data_count
 #endif
+#ifdef V80_RX_DEBUG
+							, dbgRxFsm
+							, dbgRxGap
+#endif
+							);
 
 #if !(RX_DDR_BYPASS)
 	rxPackageDropper<WIDTH>(rxEng_dataBuffer3, rxEng_metaHandlerDropFifo, rxEng_fsmDropFifo, rxPkgDrop2rxMemWriter);
@@ -2178,9 +2243,9 @@ template void rx_engine<DATA_WIDTH>(	stream<net_axis<DATA_WIDTH> >&					ipRxData
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification);
+				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,
-				ap_uint<16>					rxbuffer_max_data_count);
+				ap_uint<16>					rxbuffer_max_data_count V80_RX_DEBUG_ARGS);
 #endif

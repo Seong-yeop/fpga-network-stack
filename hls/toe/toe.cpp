@@ -119,7 +119,7 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 						timer2stateTable_releaseState);
 }
 
-//TODO use same code as in TX Engine
+#ifndef V80_RX_MEM_NO_SPLIT
 void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outputMemAccess, stream<ap_uint<1> > &rxAppDoubleAccess) {
 #pragma HLS PIPELINE II=1
 #pragma HLS INLINE off
@@ -152,7 +152,23 @@ void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outpu
 	}
 }
 
+#endif
 #if !(RX_DDR_BYPASS)
+template <int WIDTH>
+void rxAppMemDataForward(stream<net_axis<WIDTH> >& rxBufferReadData, stream<net_axis<WIDTH> >& rxDataRsp,
+						stream<rxSarAppd>& rxAppReadEnd, stream<rxSarAppd>& rxApp2rxSar_release)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	if (!rxBufferReadData.empty())
+	{
+		net_axis<WIDTH> word = rxBufferReadData.read();
+		rxDataRsp.write(word);
+		if (word.last)
+			rxApp2rxSar_release.write(rxAppReadEnd.read());
+	}
+}
+#ifndef V80_RX_MEM_NO_SPLIT
 template <int WIDTH> 
 void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 						stream<net_axis<WIDTH> >&	rxDataRsp,
@@ -311,6 +327,7 @@ void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
 		break;
 	}
 }
+#endif
 #else
 template <int WIDTH>
 void rxAppMemDataRead(	stream<ap_uint<1> >&	rxBufferReadCmd,
@@ -361,6 +378,9 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 #if !(RX_DDR_BYPASS)
 					stream<mmCmd>&					rxBufferReadCmd,
 #endif
+#ifdef V80_RX_MEM_NO_SPLIT
+					stream<rxSarAppd>&				rxApp2rxSar_release,
+#endif
 					stream<bool>&					appListenPortRsp,
 					stream<ap_uint<16> >& 			rxApp2portTable_listen_req,
 					stream<appNotification>&		appNotification,
@@ -382,10 +402,19 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 
 	 // RX Application Stream Interface
 #if !(RX_DDR_BYPASS)
+#ifdef V80_RX_MEM_NO_SPLIT
+	static stream<rxSarAppd>		rxAppReadEnd("rxAppReadEnd");
+	#pragma HLS stream variable=rxAppReadEnd					depth=64
+	#pragma HLS aggregate variable=rxAppReadEnd compact=bit
+	rx_app_stream_if(appRxDataReq, rxSar2rxApp_upd_rsp, appRxDataRspMetadata,
+						rxApp2rxSar_upd_req, rxBufferReadCmd, rxAppReadEnd);
+	rxAppMemDataForward<WIDTH>(rxBufferReadData, rxDataRsp, rxAppReadEnd, rxApp2rxSar_release);
+#else
 	rx_app_stream_if(appRxDataReq, rxSar2rxApp_upd_rsp, appRxDataRspMetadata,
 						rxApp2rxSar_upd_req, rxAppStreamIf2memAccessBreakdown);
 	rxAppMemAccessBreakdown(rxAppStreamIf2memAccessBreakdown, rxBufferReadCmd, rxAppDoubleAccess);
 	rxAppMemDataRead<WIDTH>(rxBufferReadData, rxDataRsp, rxAppDoubleAccess);
+#endif
 #else
 	rx_app_stream_if(appRxDataReq, rxSar2rxApp_upd_rsp, appRxDataRspMetadata,
 						rxApp2rxSar_upd_req, rxBufferReadCmd);
@@ -491,6 +520,7 @@ void toe_core(	// Data & Memory Interface
 #ifdef V80_RUNTIME_MSS
 , ap_uint<16> maxSegmentSize
 #endif
+V80_RX_DEBUG_ARGS
 )
 {
 	#pragma HLS INLINE
@@ -554,6 +584,11 @@ void toe_core(	// Data & Memory Interface
 	#pragma HLS aggregate variable=rxApp2rxSar_upd_req compact=bit
 	#pragma HLS aggregate variable=rxSar2rxApp_upd_rsp compact=bit
 	#pragma HLS aggregate variable=rxSar2txEng_rsp compact=bit
+#ifdef V80_RX_MEM_NO_SPLIT
+	static stream<rxSarAppd>			rxApp2rxSar_release("rxApp2rxSar_release");
+	#pragma HLS stream variable=rxApp2rxSar_release		depth=16
+	#pragma HLS aggregate variable=rxApp2rxSar_release compact=bit
+#endif
 
 	// TX Sar Table
 	static stream<txTxSarQuery>			txEng2txSar_upd_req("txEng2txSar_upd_req");
@@ -687,6 +722,9 @@ void toe_core(	// Data & Memory Interface
 					rxSar2rxEng_upd_rsp,
 					rxSar2rxApp_upd_rsp,
 					rxSar2txEng_rsp
+#ifdef V80_RX_MEM_NO_SPLIT
+					,rxApp2rxSar_release
+#endif
 #if (RX_DDR_BYPASS)
 					,axis_data_count
 					,axis_max_data_count
@@ -763,6 +801,7 @@ void toe_core(	// Data & Memory Interface
 				axis_data_count,
 				axis_max_data_count
 #endif
+				V80_RX_DEBUG_PASS
 				);
 	// TX Engine
 	tx_engine<WIDTH>(	eventEng2txEng_event,
@@ -799,6 +838,9 @@ void toe_core(	// Data & Memory Interface
 			 	 	rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
 			 	 	rxBufferReadCmd,
+#endif
+#ifdef V80_RX_MEM_NO_SPLIT
+			 	 	rxApp2rxSar_release,
 #endif
 			 	 	listenPortRsp,
 			 	 	rxApp2portTable_listen_req,
@@ -888,6 +930,7 @@ void toe(	// Data & Memory Interface
 #ifdef V80_RUNTIME_MSS
 , ap_uint<16> maxSegmentSize
 #endif
+V80_RX_DEBUG_ARGS
 )
 {
 #pragma HLS DATAFLOW disable_start_propagation
@@ -970,6 +1013,12 @@ void toe(	// Data & Memory Interface
 
 	#pragma HLS INTERFACE ap_none register port=myIpAddress
 	#pragma HLS INTERFACE ap_vld port=regSessionCount
+#ifdef V80_RX_DEBUG
+	#pragma HLS INTERFACE ap_vld port=dbgRxHeader
+	#pragma HLS INTERFACE ap_vld port=dbgRxMeta
+	#pragma HLS INTERFACE ap_vld port=dbgRxFsm
+	#pragma HLS INTERFACE ap_vld port=dbgRxGap
+#endif
 
 
 	static hls::stream<net_axis<DATA_WIDTH> > ipRxData_internal;
@@ -1058,5 +1107,6 @@ void toe(	// Data & Memory Interface
 #ifdef V80_RUNTIME_MSS
 , maxSegmentSize
 #endif
+V80_RX_DEBUG_PASS
 );
 }

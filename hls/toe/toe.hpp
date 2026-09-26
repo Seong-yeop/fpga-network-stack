@@ -32,6 +32,15 @@
 #include "../axi_utils.hpp"
 #include "../fns_config.hpp"
 
+// V80 nvmet debug build: RX drop-reason counters out of rx_engine (see rx_engine.cpp)
+#ifdef V80_RX_DEBUG
+#define V80_RX_DEBUG_ARGS , ap_uint<32>& dbgRxHeader, ap_uint<64>& dbgRxMeta, ap_uint<192>& dbgRxFsm, ap_uint<192>& dbgRxGap
+#define V80_RX_DEBUG_PASS , dbgRxHeader, dbgRxMeta, dbgRxFsm, dbgRxGap
+#else
+#define V80_RX_DEBUG_ARGS
+#define V80_RX_DEBUG_PASS
+#endif
+
 //Copied from hlslib by Johannes de Fine Licht https://github.com/definelicht/hlslib/blob/master/include/hlslib/xilinx/Utility.h
 constexpr unsigned long ConstLog2(unsigned long val) {
   return val == 1 ? 0 : 1 + ConstLog2(val >> 1);
@@ -128,15 +137,28 @@ struct appNotification
 	ap_uint<32>			ipAddress;
 	ap_uint<16>			dstPort;
 	bool				closed;
+	ap_uint<3>			extra;
 	appNotification() {}
 	appNotification(ap_uint<16> id, ap_uint<16> len, ap_uint<32> addr, ap_uint<16> port)
-				:sessionID(id), length(len), ipAddress(addr), dstPort(port), closed(false) {}
+				:sessionID(id), length(len), ipAddress(addr), dstPort(port), closed(false), extra(0) {}
 	appNotification(ap_uint<16> id, bool closed)
-				:sessionID(id), length(0), ipAddress(0),  dstPort(0), closed(closed) {}
+				:sessionID(id), length(0), ipAddress(0),  dstPort(0), closed(closed), extra(0) {}
 	appNotification(ap_uint<16> id, ap_uint<32> addr, ap_uint<16> port, bool closed)
-				:sessionID(id), length(0), ipAddress(addr),  dstPort(port), closed(closed) {}
+				:sessionID(id), length(0), ipAddress(addr),  dstPort(port), closed(closed), extra(0) {}
 	appNotification(ap_uint<16> id, ap_uint<16> len, ap_uint<32> addr, ap_uint<16> port, bool closed)
-			:sessionID(id), length(len), ipAddress(addr), dstPort(port), closed(closed) {}
+			:sessionID(id), length(len), ipAddress(addr), dstPort(port), closed(closed), extra(0) {}
+	static appNotification gapFill(ap_uint<16> id, ap_uint<19> total, ap_uint<32> addr, ap_uint<16> port)
+	{
+		appNotification n(id, 0, addr, port);
+		ap_uint<19> t = total;
+		for (int i = 0; i < 4; i++)
+		{
+#pragma HLS UNROLL
+			if (t > 65528) { t -= 65528; n.extra++; }
+		}
+		n.length = t;
+		return n;
+	}
 };
 
 
@@ -217,6 +239,7 @@ void toe_core(	// Data & Memory Interface
 #ifdef V80_RUNTIME_MSS
 , ap_uint<16> maxSegmentSize
 #endif
+V80_RX_DEBUG_ARGS
 );
 
 

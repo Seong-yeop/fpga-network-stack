@@ -2,6 +2,12 @@
 #include "../toe.hpp"
 #include "../session_lookup_controller/session_lookup_controller.hpp"
 using namespace hls;
+#ifdef V80_RX_DEBUG
+static ap_uint<32> v80_dbg_rx_header;
+static ap_uint<64> v80_dbg_rx_meta;
+static ap_uint<192> v80_dbg_rx_fsm;
+static ap_uint<192> v80_dbg_rx_gap;
+#endif
 void toe(	// Data & Memory Interface
 			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipRxData,
 #if !(RX_DDR_BYPASS)
@@ -52,6 +58,9 @@ void toe(	// Data & Memory Interface
 			ap_uint<16>&							regSessionCount
 #ifdef V80_RUNTIME_MSS
 , ap_uint<16> maxSegmentSize = TCP_MSS
+#endif
+#ifdef V80_RX_DEBUG
+, ap_uint<32>& dbgRxHeader = v80_dbg_rx_header, ap_uint<64>& dbgRxMeta = v80_dbg_rx_meta, ap_uint<192>& dbgRxFsm = v80_dbg_rx_fsm, ap_uint<192>& dbgRxGap = v80_dbg_rx_gap
 #endif
 )
 ;

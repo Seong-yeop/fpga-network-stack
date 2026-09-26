@@ -110,9 +110,9 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification);
+				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,
-				ap_uint<16>					rxbuffer_max_data_count);
+				ap_uint<16>					rxbuffer_max_data_count V80_RX_DEBUG_ARGS);
 #endif

@@ -14,17 +14,41 @@ static void boundary_test() {
  }
 }
 static void window_test() {
+#if RX_DDR_BYPASS
  stream<rxSarRecvd> rx;stream<rxSarAppd> app,app_reply;stream<ap_uint<16>> tx;
  stream<rxSarEntry> rx_reply;stream<rxSarReply> tx_reply;
  rx.write(rxSarRecvd(999,0,0,0,false,0));
  rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,0,16);
  for(unsigned used: {0u,3u,8u,11u,12u,16u,17u}) {
   tx.write(999);rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,used,16);
+#ifdef V80_RX_WINDOW_MAX
+  unsigned expected=0;   // 16 entries are all reserve
+#else
   unsigned expected=used>=12?0:(16-used)*(DATA_WIDTH/8);
+#endif
   check(tx_reply.read().windowSize==expected,"FIFO entry-to-byte window");
  }
  tx.write(999);rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,0,0);
  check(tx_reply.read().windowSize==0,"zero capacity window");
+#ifdef V80_RX_WINDOW_MAX
+ // a 4 MiB FIFO: the window is capped below 2^WINDOW_BITS, then follows (free - reserve)/2^SHIFT and is 0
+ // inside the reserve; without window scaling (session 999, shift 0) it saturates at 64 KiB - 1, with the
+ // TOE's scale (998) it is sent >> 3. 16 sessions' windows together stay out of the reserve.
+ rx.write(rxSarRecvd(998,0,0,0,false,WINDOW_SCALE_BITS));
+ rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,0,16);
+ for(unsigned used: {0u,1000u,20000u,30000u,31000u,31743u,31744u,32000u,32767u,32768u}) {
+  unsigned free_entries=used>=32768?0:32768-used;
+  unsigned usable=free_entries>V80_RX_WINDOW_RESERVE?free_entries-V80_RX_WINDOW_RESERVE:0;
+  unsigned share=(usable*(DATA_WIDTH/8))>>V80_RX_WINDOW_SHIFT;
+  check(16*share<=usable*(DATA_WIDTH/8),"windows exceed the free space above the reserve");
+  unsigned expected=share<V80_RX_WINDOW_MAX?share:V80_RX_WINDOW_MAX;
+  tx.write(999);rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,used,32768);
+  check(tx_reply.read().windowSize==(expected<0xFFFF?expected:0xFFFF),"large FIFO window, no scaling");
+  tx.write(998);rx_sar_table(rx,app,tx,rx_reply,app_reply,tx_reply,used,32768);
+  check(tx_reply.read().windowSize==(expected>>WINDOW_SCALE_BITS),"large FIFO window, scaled");
+ }
+#endif
+#endif
 }
 static void alignment_test() {
  for(unsigned n=0;n<=DATA_WIDTH/8;n++) {
@@ -64,6 +88,12 @@ int main(){try{
  }
  b.close.write(b.sid);b.run(2000);check(b.fin,"FIN timeout");
 
+#ifdef V80_RX_DEBUG
+ std::cout<<std::dec<<"RXDEBUG invalid="<<v80_dbg_rx_header<<" port_closed="<<v80_dbg_rx_meta(31,0)<<" lookup_miss="<<v80_dbg_rx_meta(63,32)
+  <<" accept="<<v80_dbg_rx_fsm(31,0)<<(RX_DDR_BYPASS?" space=":" ooo=")<<v80_dbg_rx_fsm(63,32)<<" dup="<<v80_dbg_rx_fsm(95,64)<<" gap="<<v80_dbg_rx_fsm(127,96)
+  <<" state="<<v80_dbg_rx_fsm(159,128)<<(RX_DDR_BYPASS?" occupancy=":" filled=")<<v80_dbg_rx_fsm(175,160)<<std::endl;
+ check(v80_dbg_rx_fsm(31,0)>=10,"RX debug accept counter");
+#endif
  std::cout<<std::dec<<"PASS toe width="<<DATA_WIDTH<<" cycles="<<b.cycles<<std::endl;
  std::ofstream("../../csim_pass")<<"PASS\n";return 0;
  }catch(const std::exception&e){std::cerr<<"FAIL "<<e.what()<<std::endl;return 1;}}

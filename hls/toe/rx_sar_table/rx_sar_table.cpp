@@ -46,6 +46,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<rxSarEntry>&			rxSar2rxEng_upd_rsp,
 					stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
 					stream<rxSarReply>&			rxSar2txEng_rsp
+#ifdef V80_RX_MEM_NO_SPLIT
+					,stream<rxSarAppd>&			rxApp2rxSar_release
+#endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
                     ,ap_uint<16>                rxbuffer_max_data_count
@@ -74,6 +77,19 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
       if ((rxbuffer_max_data_count != 0) && (rxbuffer_data_count < rxbuffer_max_data_count))
       {
         ap_uint<16> fifo_free_entries = rxbuffer_max_data_count - rxbuffer_data_count;
+#ifdef V80_RX_WINDOW_MAX
+        // V80 nvmet: every session may take 1/2^V80_RX_WINDOW_SHIFT of the free FIFO bytes above a reserve of
+        // V80_RX_WINDOW_RESERVE entries, up to V80_RX_WINDOW_MAX (< 2^WINDOW_BITS); the fixed 8 x MSS below
+        // capped one connection at ~4.5 GB/s. rx_engine drops every segment while the FIFO has <= 375 free
+        // entries and this TOE cannot reassemble, so a drop costs the sender go-back-N and RTOs: with at most
+        // 2^SHIFT sessions the windows together never reach into the reserve, so the FIFO stays above it.
+        ap_uint<16> usable_entries = (fifo_free_entries > (ap_uint<16>)V80_RX_WINDOW_RESERVE) ?
+                                     (ap_uint<16>)(fifo_free_entries - V80_RX_WINDOW_RESERVE) : (ap_uint<16>)0;
+        ap_uint<16 + DATA_KEEP_BITS> free_bytes = ((ap_uint<16 + DATA_KEEP_BITS>)usable_entries) << DATA_KEEP_BITS;
+        ap_uint<16 + DATA_KEEP_BITS> share = free_bytes >> V80_RX_WINDOW_SHIFT;
+        actualWindowSize = (share < (ap_uint<16 + DATA_KEEP_BITS>)V80_RX_WINDOW_MAX) ? (ap_uint<WINDOW_BITS>)share
+                                                                                   : (ap_uint<WINDOW_BITS>)V80_RX_WINDOW_MAX;
+#else
         ap_uint<18> fifo_free_entries_wide = fifo_free_entries;
         ap_uint<18> rxbuffer_max_data_count_wide = rxbuffer_max_data_count;
         ap_uint<WINDOW_BITS> target_window = 0;
@@ -95,15 +111,23 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
             ((ap_uint<16 + DATA_KEEP_BITS>)fifo_free_entries) << DATA_KEEP_BITS;
         actualWindowSize = (fifo_free_bytes < target_window) ?
                            (ap_uint<WINDOW_BITS>)fifo_free_bytes : target_window;
+#endif
       }
 
 #if (WINDOW_SCALE)
+#ifdef V80_RX_WINDOW_MAX
+      // a peer without window scaling sees at most 64 KiB - 1 (not the value truncated to 16 bits)
+      if (entry.win_shift == 0 && actualWindowSize > 0xFFFF) actualWindowSize = 0xFFFF;
+#endif
       reply.windowSize = actualWindowSize >> entry.win_shift;
 #else
       reply.windowSize = actualWindowSize(15, 0);
 #endif
 
 #else  // !(RX_DDR_BYPASS)		
+#ifdef V80_RX_MEM_NO_SPLIT
+				entry.appd = entry.released;
+#endif
 		//Pre-calculated usedLength, windowSize to improve timing in metaLoader
 #if (WINDOW_SCALE)
 				ap_uint<WINDOW_BITS> actualWindowSize = (entry.appd - ((ap_uint<WINDOW_BITS>)entry.recvd)) - 1; // This works even for wrap around
@@ -143,6 +167,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 			if (in_recvd.init)
 			{
 				rx_table[in_recvd.sessionID].appd = in_recvd.recvd;
+#ifdef V80_RX_MEM_NO_SPLIT
+				rx_table[in_recvd.sessionID].released = in_recvd.recvd;
+#endif
 #if (WINDOW_SCALE)
 				rx_table[in_recvd.sessionID].win_shift = in_recvd.win_shift;
 #endif
@@ -153,4 +180,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 			rxSar2rxEng_upd_rsp.write(rx_table[in_recvd.sessionID]);
 		}
 	}
+#ifdef V80_RX_MEM_NO_SPLIT
+	else if(!rxApp2rxSar_release.empty())
+	{
+		rxSarAppd rel = rxApp2rxSar_release.read();
+		rx_table[rel.sessionID].released = rel.appd;
+	}
+#endif
 }
