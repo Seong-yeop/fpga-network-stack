@@ -53,6 +53,9 @@ void listening_port_table(	stream<ap_uint<16> >&	rxApp2portTable_listen_req,
 	static bool listeningPortTable[32768];
 	#pragma HLS bind_storage variable=listeningPortTable type=RAM_T2P impl=BRAM
 	#pragma HLS DEPENDENCE variable=listeningPortTable inter false
+#ifdef V80_PORT_TABLE_NO_RESET
+	#pragma HLS reset variable=listeningPortTable off
+#endif
 
 	ap_uint<16> currPort;
 
@@ -104,6 +107,9 @@ void free_port_table(	stream<ap_uint<16> >&	sLookup2portTable_releasePort,
 	static bool freePortTable[32768];
 	#pragma HLS bind_storage variable=freePortTable type=RAM_T2P impl=BRAM
 	#pragma HLS DEPENDENCE variable=freePortTable inter false
+#ifdef V80_PORT_TABLE_NO_RESET
+	#pragma HLS reset variable=freePortTable off
+#endif
 
 
 	// Free Ports Cache

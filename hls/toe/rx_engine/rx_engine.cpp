@@ -665,10 +665,11 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 	#pragma HLS PIPELINE II=1
 	#pragma HLS INLINE off
 
-	enum fsmStateType {IDLE, PARSE};
+	enum fsmStateType {IDLE, PARSE, SHIFT};
 	static fsmStateType state = IDLE;
 	static ap_uint<6> remainingBytes;
 	static ap_uint<320> fields;
+	static ap_uint<6> shiftBytes;
 
 	switch (state)
 	{
@@ -682,6 +683,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 		}
 		break;
 	case PARSE:
+	{
 		ap_uint<8> optionKind = fields(7, 0);
 		ap_uint<8> optionLength = fields(15, 8);
 
@@ -703,7 +705,8 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 			state = IDLE;
 			break;
 		case 1:
-			optionLength = 1;
+			shiftBytes = 1;
+			state = SHIFT;
 			break;
 		case 3:
 			// std::cout << "PARSE WS: " << (uint16_t)fields(19, 16) << std::endl;
@@ -717,10 +720,19 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 				// std::cout << "PARSE DONE" << std::endl;
 				state = IDLE;
 			}
+			else
+			{
+				shiftBytes = optionLength;
+				state = SHIFT;
+			}
 			break;
 		}//switch
-		remainingBytes -= optionLength;
-		fields = (fields >> (optionLength*8));
+		break;
+	}
+	case SHIFT:
+		remainingBytes -= shiftBytes;
+		fields = (fields >> (shiftBytes * 8));
+		state = PARSE;
 		break;
 	}//switch
 }
