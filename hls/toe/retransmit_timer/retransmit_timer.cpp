@@ -81,7 +81,7 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 	{
 		if (!rt_update.stop)
 		{
-			retransmitTimerTable[rt_update.sessionID].time = TIME_1s;
+			retransmitTimerTable[rt_update.sessionID].time = TIME_FIRST_RTO;
 		}
 		else
 		{
@@ -132,7 +132,7 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 				switch(currEntry.retries)
 				{
 				case 0:
-					currEntry.time = TIME_1s; //TIME_5s;
+					currEntry.time = TIME_FIRST_RTO; //TIME_5s;
 					break;
 				case 1:
 					currEntry.time = TIME_5s; //TIME_7s;

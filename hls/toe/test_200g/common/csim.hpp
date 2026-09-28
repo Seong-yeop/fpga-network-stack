@@ -45,7 +45,7 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0;std::deque<Bytes> packets;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
 #if !(RX_DDR_BYPASS)
@@ -85,9 +85,9 @@ struct Bench {
   if(cycles%delay==0 && !appRx.empty()){auto a=appRx.read();check(!lengths.empty(),"missing RX metadata");unsigned before=received.size();append(received,a);unsigned bytes=received.size()-before;check(bytes<=lengths.front(),"RX request length exceeded");lengths.front()-=bytes;if(a.last){check(lengths.front()==0,"early RX TLAST");lengths.pop_front();}else check(lengths.front()!=0,"missing RX TLAST");}
   if(!txWC.empty())writes.push_back(txWC.read());
   if(cycles>=writePauseUntil && cycles%delay==0 && !writes.empty()&&!txWrite.empty()){auto a=txWrite.read();for(unsigned j=0;j<DATA_WIDTH/8;j++)if(a.keep[j])memory[writes.front().saddr.to_uint()+wo++]=a.data(j*8+7,j*8);if(a.last){check(wo==writes.front().bbt,"write length");writes.pop_front();wo=0;mmStatus s{};s.okay=1;txStatus.write(s);}}
-  if(!txRC.empty()){reads.push_back(txRC.read());readCommands++;}
+  if(!txRC.empty()){auto c=txRC.read();reads.push_back(c);readLog.push_back(c);readCommands++;}
   if(cycles%delay==0 && !reads.empty()&&txRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=reads.front();for(unsigned j=0;j<DATA_WIDTH/8 && ro<c.bbt;j++,ro++){a.data(j*8+7,j*8)=memory.at(c.saddr.to_uint()+ro);a.keep[j]=1;}a.strb=a.keep;a.last=ro==c.bbt;txRead.write(a);if(a.last){reads.pop_front();ro=0;}}
-  if(!txRsp.empty())check(txRsp.read().error==0,"TX request rejected");
+  if(!txRsp.empty()){auto r=txRsp.read();if(r.error!=0){static std::string m;m="TX request rejected err="+std::to_string(r.error.to_uint())+" len="+std::to_string(r.length.to_uint())+" space="+std::to_string(r.remaining_space.to_uint())+" cycle="+std::to_string(cycles);check(false,m.c_str());}}
   if(!opened.empty()){auto r=opened.read();check(r.success,"open failed");sid=r.sessionID;openReplies++;}
   if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){check(out.size()==(expectWS?48:44),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
  }

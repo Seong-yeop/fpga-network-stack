@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 width=${1:-128}; stage=${2:-csim}; selected=${3:-all}
 case "$width" in 64|128) ;; *) exit 2;; esac
-cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit)
+cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit retransmit_window retransmit_wrap)
 if [[ "$selected" != all ]]; then
  [[ -f "cases/tb_$selected.cpp" ]] || { echo "Unknown case: $selected" >&2; exit 2; }
  cases=("$selected")
