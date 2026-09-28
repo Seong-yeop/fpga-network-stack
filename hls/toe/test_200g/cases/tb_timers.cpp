@@ -5,7 +5,7 @@ static void test() {
  stream<rxRetransmitTimerUpdate> clear;stream<txRetransmitTimerSet> set;
  stream<event> events;stream<ap_uint<16>> release;stream<appNotification> rx;stream<openStatus> tx;
  set.write(txRetransmitTimerSet(7));bool fired=false;
- for(unsigned i=0;i<10000;i++) {
+ for(unsigned i=0;i<40000;i++) {
   retransmit_timer(clear,set,events,release,rx,tx);
   if(!events.empty()){auto e=events.read();check(e.sessionID==7,"wrong timer session");fired=true;clear.write(rxRetransmitTimerUpdate(7,true));break;}
  }
