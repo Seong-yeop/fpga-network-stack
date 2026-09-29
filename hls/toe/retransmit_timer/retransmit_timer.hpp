@@ -39,6 +39,8 @@ struct retransmitTimerEntry
 	ap_uint<32>		time;
 	ap_uint<3>		retries;
 	bool			active;
+	bool			fast;
+	ap_uint<16>		ftime;
 	eventType		type;
 };
 

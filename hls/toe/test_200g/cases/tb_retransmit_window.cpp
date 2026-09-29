@@ -1,5 +1,5 @@
-// Regression: one retransmission event covers the whole unacked window instead of stopping after four
-// segments, so a single loss in a stream of seven segments is repaired by one event.
+// Regression: a fast retransmission after three duplicate ACKs resends exactly the missing segment, and the
+// cumulative ACK that follows ends the recovery without any further buffer read.
 #include "../common/csim.hpp"
 static std::string fmt(const char *why,const Bench &b){return std::string(why)+" txPayload="+std::to_string(b.txPayload)+" reads="+std::to_string(b.readLog.size())+" cycle="+std::to_string(b.cycles);}
 static void test() {
@@ -10,17 +10,15 @@ static void test() {
   b.txMeta.write(appTxMeta(b.sid,data.size()));b.run(20);send(b.appTx,data);b.run(150);
  }
  b.run(200);check(b.txPayload==7*8960,fmt("initial TX missing",b).c_str());
- unsigned acked=b.ack+8960;send(b.ipRx,packet(b.seq,acked,16));b.run(30);
+ unsigned hole=b.ack+8960;send(b.ipRx,packet(b.seq,hole,16));b.run(30);
  unsigned before=b.readLog.size();
- for(int i=0;i<3;i++){send(b.ipRx,packet(b.seq,acked,16));b.run(10);}
+ for(int i=0;i<3;i++){send(b.ipRx,packet(b.seq,hole,16));b.run(10);}
  b.run(300);
- check(b.readLog.size()>=before+6,fmt("retransmission issued fewer than six reads",b).c_str());
- unsigned base=b.readLog[before].saddr.to_uint();
- for(unsigned k=0;k<6;k++){
-  check(((b.readLog[before+k].saddr.to_uint()-base)&(BUFFER_SIZE-1))==k*8960,"retransmission reads are not one contiguous window");
-  check(b.readLog[before+k].bbt==8960,"retransmission segment length");
- }
- b.autoAck=true;send(b.ipRx,packet(b.seq,acked,16));b.run(2000);
+ check(b.readLog.size()==before+1,fmt("fast retransmission must read exactly one segment",b).c_str());
+ check((b.readLog[before].saddr.to_uint()&(BUFFER_SIZE-1))==(hole&(BUFFER_SIZE-1)),"retransmission read address");
+ check(b.readLog[before].bbt==8960,"retransmission segment length");
+ b.autoAck=true;send(b.ipRx,packet(b.seq,b.ack+7*8960,16));b.run(2000);
+ check(b.readLog.size()==before+1,fmt("buffer read after the cumulative ACK",b).c_str());
  Bytes tail(64);for(unsigned k=0;k<tail.size();k++)tail[k]=(b.expectedTx.size()+k)*31+9;
  b.expectedTx.insert(b.expectedTx.end(),tail.begin(),tail.end());
  b.txMeta.write(appTxMeta(b.sid,tail.size()));b.run(20);send(b.appTx,tail);b.run(500);

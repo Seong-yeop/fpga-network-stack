@@ -406,6 +406,10 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					meta.length = segmentMss;
 					txSar.ackd += segmentMss;
 					txSar.usedLength -= segmentMss;
+					if (ml_curEvent.rt_count == 0)
+					{
+						ml_FsmState = 0;
+					}
 				}
 				else
 				{
@@ -434,7 +438,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					txEng2sLookup_rev_req.write(ml_curEvent.sessionID);
 
 					// Only set RT timer if we actually send sth
-					txEng2timer_setRetransmitTimer.write(txRetransmitTimerSet(ml_curEvent.sessionID));
+					txEng2timer_setRetransmitTimer.write(txRetransmitTimerSet(ml_curEvent.sessionID, RT, ml_curEvent.rt_count == 0));
 				}
 				ml_sarLoaded = true;
 				txSarReg = txSar;

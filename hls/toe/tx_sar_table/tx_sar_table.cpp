@@ -163,28 +163,40 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 		rxTxSarQuery tst_rxEngUpdate = rxEng2txSar_upd_req.read();
 		if (tst_rxEngUpdate.write)
 		{
-			tx_table[tst_rxEngUpdate.sessionID].ackd = tst_rxEngUpdate.ackd;
-			tx_table[tst_rxEngUpdate.sessionID].recv_window = tst_rxEngUpdate.recv_window;
-			tx_table[tst_rxEngUpdate.sessionID].cong_window = tst_rxEngUpdate.cong_window;
-			tx_table[tst_rxEngUpdate.sessionID].count = tst_rxEngUpdate.count;
-			tx_table[tst_rxEngUpdate.sessionID].fastRetransmitted = tst_rxEngUpdate.fastRetransmitted;
+			txSarEntry entry = tx_table[tst_rxEngUpdate.sessionID];
+			bool startRecovery = tst_rxEngUpdate.fastRetransmitted && !entry.fastRetransmitted;
+			entry.ackd = tst_rxEngUpdate.ackd;
+			entry.recv_window = tst_rxEngUpdate.recv_window;
+			entry.count = tst_rxEngUpdate.count;
+			entry.fastRetransmitted = tst_rxEngUpdate.fastRetransmitted;
+			if (startRecovery)
+			{
+				ap_uint<WINDOW_BITS> flight = entry.not_ackd - tst_rxEngUpdate.ackd;
+				ap_uint<WINDOW_BITS> half = flight >> 1;
+				entry.slowstart_threshold = (half > 2 * MSS) ? half : ap_uint<WINDOW_BITS>(2 * MSS);
+				entry.cong_window = entry.slowstart_threshold;
+				entry.recover = entry.not_ackd;
+			}
+			else
+			{
+				entry.cong_window = tst_rxEngUpdate.cong_window;
+			}
 #if (WINDOW_SCALE)
 			ap_uint<4> win_shift;
 			if (tst_rxEngUpdate.init)
 			{
 				win_shift = tst_rxEngUpdate.win_shift;
-				tx_table[tst_rxEngUpdate.sessionID].win_shift = tst_rxEngUpdate.win_shift;
+				entry.win_shift = tst_rxEngUpdate.win_shift;
 			}
 			else
 			{
-				win_shift = tx_table[tst_rxEngUpdate.sessionID].win_shift;
+				win_shift = entry.win_shift;
 			}
 #endif
-			// Push ACK to txAppInterface
+			tx_table[tst_rxEngUpdate.sessionID] = entry;
 #if !(TCP_NODELAY)
 			txSar2txApp_ack_push.write(txSarAckPush(tst_rxEngUpdate.sessionID, tst_rxEngUpdate.ackd));
 #else
-
 #if (WINDOW_SCALE)
 			ap_uint<30> scaled_recv_window = 0;
 			scaled_recv_window(win_shift+15, win_shift) = tst_rxEngUpdate.recv_window;
@@ -192,9 +204,9 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 			ap_uint<30> scaled_recv_window = tst_rxEngUpdate.recv_window;
 #endif
 			ap_uint<WINDOW_BITS> minWindow;
-			if (tst_rxEngUpdate.cong_window < scaled_recv_window) //tst_rxEngUpdate.recv_window)
+			if (entry.cong_window < scaled_recv_window)
 			{
-				minWindow = tst_rxEngUpdate.cong_window;
+				minWindow = entry.cong_window;
 			}
 			else
 			{
@@ -210,7 +222,8 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 													tx_table[tst_rxEngUpdate.sessionID].cong_window,
 													tx_table[tst_rxEngUpdate.sessionID].slowstart_threshold,
 													tx_table[tst_rxEngUpdate.sessionID].count,
-													tx_table[tst_rxEngUpdate.sessionID].fastRetransmitted));
+													tx_table[tst_rxEngUpdate.sessionID].fastRetransmitted,
+													tx_table[tst_rxEngUpdate.sessionID].recover));
 		}
 	}
 }

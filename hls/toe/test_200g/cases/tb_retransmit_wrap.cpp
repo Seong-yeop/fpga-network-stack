@@ -1,5 +1,5 @@
-// Regression: a retransmission whose window straddles the 256 KiB ring boundary of a session other
-// than 0 must read both halves from that session's ring (the wrapped half used to start at address 0).
+// Regression: a retransmitted segment that straddles the 256 KiB ring boundary of a session other than 0
+// must be read in two parts from that session's ring (the wrapped part used to start at address 0).
 #include "../common/csim.hpp"
 static std::string fmt(const char *why,const Bench &b){return std::string(why)+" txPayload="+std::to_string(b.txPayload)+" reads="+std::to_string(b.readLog.size())+" cycle="+std::to_string(b.cycles);}
 static void write_segment(Bench &b,unsigned n,unsigned settle) {
@@ -17,25 +17,24 @@ static void test() {
  b.seq=1001;b.ack=isn+1;b.packets.clear();
  unsigned toWrap=BUFFER_SIZE-((isn+1)&(BUFFER_SIZE-1));
  while(toWrap>4*8960){write_segment(b,8960,160);toWrap-=8960;}
+ if(toWrap%8960<64){write_segment(b,100,160);toWrap-=100;}
  b.run(400);check(b.txPayload==b.expectedTx.size(),fmt("pre-wrap TX missing",b).c_str());
- b.autoAck=false;unsigned start=b.expectedTx.size();
+ b.autoAck=false;unsigned start=b.expectedTx.size(),cross=toWrap/8960;
  for(int i=0;i<7;i++)write_segment(b,8960,150);
  b.run(200);check(b.txPayload==start+7*8960,fmt("window TX missing",b).c_str());
- unsigned acked=b.ack+start+8960;send(b.ipRx,packet(b.seq,acked,16,{},false,b.myPort));b.run(30);
+ unsigned hole=b.ack+start+cross*8960;send(b.ipRx,packet(b.seq,hole,16,{},false,b.myPort));b.run(30);
  unsigned before=b.readLog.size();
- for(int i=0;i<3;i++){send(b.ipRx,packet(b.seq,acked,16,{},false,b.myPort));b.run(10);}
+ for(int i=0;i<3;i++){send(b.ipRx,packet(b.seq,hole,16,{},false,b.myPort));b.run(10);}
  b.run(400);
- check(b.readLog.size()>before,fmt("no retransmission reads",b).c_str());
- unsigned expect=((isn+1+start+8960)&(BUFFER_SIZE-1))|(b.sid<<WINDOW_BITS),covered=0;
- for(unsigned i=before;i<b.readLog.size()&&covered<6*8960;i++){
-  unsigned a=b.readLog[i].saddr.to_uint(),n=b.readLog[i].bbt.to_uint();
-  check((a>>WINDOW_BITS)==b.sid,"retransmission read left the session ring");
-  check(a==expect,"retransmission reads are not contiguous");
-  check(((a&(BUFFER_SIZE-1))+n)<=BUFFER_SIZE,"retransmission read crosses the ring end");
-  covered+=n;expect=(((a+n)&(BUFFER_SIZE-1))|(b.sid<<WINDOW_BITS));
- }
- check(covered==6*8960,fmt("retransmission did not cover the unacked window",b).c_str());
- b.autoAck=true;send(b.ipRx,packet(b.seq,acked,16,{},false,b.myPort));b.run(2500);
+ check(b.readLog.size()==before+2,fmt("a segment across the ring end must be read in exactly two parts",b).c_str());
+ unsigned first=b.readLog[before].saddr.to_uint(),n1=b.readLog[before].bbt.to_uint();
+ unsigned second=b.readLog[before+1].saddr.to_uint(),n2=b.readLog[before+1].bbt.to_uint();
+ check((first>>WINDOW_BITS)==b.sid&&(second>>WINDOW_BITS)==b.sid,"retransmission read left the session ring");
+ check((first&(BUFFER_SIZE-1))==(hole&(BUFFER_SIZE-1)),"first part does not start at the hole");
+ check((first&(BUFFER_SIZE-1))+n1==BUFFER_SIZE,"first part does not end at the ring end");
+ check((second&(BUFFER_SIZE-1))==0&&n1+n2==8960,"second part does not continue at the ring start");
+ b.autoAck=true;send(b.ipRx,packet(b.seq,b.ack+start+7*8960,16,{},false,b.myPort));b.run(2500);
+ check(b.readLog.size()==before+2,fmt("buffer read after the cumulative ACK",b).c_str());
  check(b.txPayload==start+7*8960,fmt("payload after recovery",b).c_str());
 }
 int main(){return run_case("retransmit_wrap",test);}

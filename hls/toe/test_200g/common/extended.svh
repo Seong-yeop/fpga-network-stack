@@ -1,5 +1,5 @@
 // Shared setup/clock only. The selected cases/tb_*.svh defines case_step().
-int case_phase=0,case_start=0,case_packets=0;
+int case_phase=0,case_start=0,case_packets=0,max_cycles=200000;
 bit case_done=0,automatic_syn=1;
 function automatic bit permit(input int index,input bit source);
  if(target>=0 && !source && index!=target)return 1;
@@ -60,7 +60,7 @@ initial begin
   if(case_done)begin
    check_coverage();$fclose(packet_log);$display("PASS %s width=%0d seed=%0d profile=%0d target=%0d stall=%0d",CASE_NAME,W,seed,profile,target,stall_cycles);$finish;
   end
-  if(cycle>=200000)begin report_coverage();$fatal(1,"case timeout %s phase=%0d rx=%0d tx=%0d",CASE_NAME,case_phase,rx_bytes,tx_bytes);end
+  if(cycle>=max_cycles)begin report_coverage();$fatal(1,"case timeout %s phase=%0d rx=%0d tx=%0d",CASE_NAME,case_phase,rx_bytes,tx_bytes);end
   @(negedge ap_clk);random_state=(random_state>>1)^((0-(random_state&1))&32'hd0000001);
  end
 end
