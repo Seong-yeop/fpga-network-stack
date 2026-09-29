@@ -1255,9 +1255,15 @@ void read_data_stitching(	hls::stream<bool>&			memAccessBreakdown2readPkgStitche
 
 	static net_axis<WIDTH> prevWord;
 	static bool pkgNeedsMerge = false;
-	enum fsmStateType {IDLE, FIRST_PART, STITCH, ATTACH_ALIGNED, RESIDUE};
+	enum fsmStateType {IDLE, FIRST_PART, STITCH, STITCH_MERGE, ATTACH_ALIGNED, RESIDUE};
 	static fsmStateType state = IDLE;
 	static ap_uint<8> offset = 0;
+	static ap_uint<WIDTH> coarseShl;
+	static ap_uint<WIDTH> coarseShr;
+	static ap_uint<WIDTH/8> coarseShlKeep;
+	static ap_uint<WIDTH/8> coarseShrKeep;
+	static ap_uint<WIDTH/8> lowMask;
+	static bool stitchLast = false;
 
 	switch(state)
 	{
@@ -1357,23 +1363,45 @@ void read_data_stitching(	hls::stream<bool>&			memAccessBreakdown2readPkgStitche
 	case STITCH:
 		if (!readDataIn.empty())
 		{
-			net_axis<WIDTH> sendWord;
-			sendWord.last = 0;
 			net_axis<WIDTH> currWord = readDataIn.read();
-
-			//Create new word consisting of current and previous word
-			// offset specifies how many bytes of prevWord are valid
-			sendWord.data((offset*8) -1, 0) = prevWord.data((offset*8) -1, 0);
-			sendWord.keep(offset-1, 0) = prevWord.keep(offset -1, 0);
-
-			sendWord.data(WIDTH-1, (offset*8)) = currWord.data(WIDTH - (offset*8) - 1, 0);
-			sendWord.keep(WIDTH/8-1, offset) = currWord.keep(WIDTH/8 - offset - 1, 0);
-			sendWord.last = (currWord.keep[WIDTH/8 - offset] == 0);
-
+			ap_uint<7> inv = WIDTH/8 - offset;
+			ap_uint<3> hi = offset(6, 4);
+			ap_uint<3> ihi = inv(6, 4);
+			coarseShl = currWord.data << (ap_uint<10>(hi) * 128);
+			coarseShlKeep = currWord.keep << (ap_uint<7>(hi) * 16);
+			coarseShr = currWord.data >> (ap_uint<10>(ihi) * 128);
+			coarseShrKeep = currWord.keep >> (ap_uint<7>(ihi) * 16);
+			for (int b = 0; b < WIDTH/8; b++)
+			{
+				#pragma HLS UNROLL
+				lowMask[b] = (b < offset);
+			}
+			stitchLast = currWord.last;
+			state = STITCH_MERGE;
+		}
+		break;
+	case STITCH_MERGE:
+		{
+			net_axis<WIDTH> sendWord;
+			ap_uint<7> inv = WIDTH/8 - offset;
+			ap_uint<4> lo = offset(3, 0);
+			ap_uint<4> ilo = inv(3, 0);
+			ap_uint<WIDTH> shl = coarseShl << (ap_uint<7>(lo) * 8);
+			ap_uint<WIDTH/8> shlKeep = coarseShlKeep << lo;
+			ap_uint<WIDTH> shr = coarseShr >> (ap_uint<7>(ilo) * 8);
+			ap_uint<WIDTH/8> shrKeep = coarseShrKeep >> ilo;
+			for (int b = 0; b < WIDTH/8; b++)
+			{
+				#pragma HLS UNROLL
+				sendWord.data(b*8+7, b*8) = lowMask[b] ? prevWord.data(b*8+7, b*8) : shl(b*8+7, b*8);
+				sendWord.keep[b] = lowMask[b] ? prevWord.keep[b] : shlKeep[b];
+			}
+			sendWord.last = (shrKeep[0] == 0);
 			readDataOut.write(sendWord);
-			prevWord.data((offset*8) - 1, 0) = currWord.data(WIDTH-1, WIDTH - (offset*8));
-			prevWord.keep(offset - 1, 0) = currWord.keep(WIDTH/8 - 1, WIDTH/8 - offset);
-			if (currWord.last)
+			prevWord.data = shr;
+			prevWord.keep = shrKeep;
+			state = STITCH;
+			if (stitchLast)
 			{
 				state = IDLE;
 				if (!sendWord.last)
