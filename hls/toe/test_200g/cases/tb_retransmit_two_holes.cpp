@@ -1,5 +1,3 @@
-// Regression: two losses in one window cost one segment per trigger: the third duplicate ACK resends the
-// first hole, the partial ACK that follows resends the second hole at once, and nothing is sent twice.
 #include "../common/csim.hpp"
 static std::string fmt(const char *why,const Bench &b){return std::string(why)+" txPayload="+std::to_string(b.txPayload)+" reads="+std::to_string(b.readLog.size())+" cycle="+std::to_string(b.cycles);}
 static void expect_read(const Bench &b,unsigned index,unsigned seq,const char *why){
@@ -8,14 +6,10 @@ static void expect_read(const Bench &b,unsigned index,unsigned seq,const char *w
  check(b.readLog[index].bbt==8960,why);
 }
 static void test() {
- Bench b;connect_passive(b);b.autoAck=false;
- for(int i=0;i<7;i++){
-  Bytes data(8960);for(unsigned k=0;k<data.size();k++)data[k]=(b.expectedTx.size()+k)*31+9;
-  b.expectedTx.insert(b.expectedTx.end(),data.begin(),data.end());
-  b.txMeta.write(appTxMeta(b.sid,data.size()));b.run(20);send(b.appTx,data);b.run(150);
- }
- b.run(200);check(b.txPayload==7*8960,fmt("initial TX missing",b).c_str());
- unsigned hole1=b.ack+8960,hole2=b.ack+4*8960,all=b.ack+7*8960;
+ Bench b;connect_passive(b);unsigned warm=warm_window(b,6),base=b.ack+warm;b.autoAck=false;
+ for(int i=0;i<7;i++)write_data(b,8960);
+ b.run(200);check(b.txPayload==warm+7*8960,fmt("initial TX missing",b).c_str());
+ unsigned hole1=base+8960,hole2=base+4*8960,all=base+7*8960;
  send(b.ipRx,packet(b.seq,hole1,16));b.run(30);
  unsigned before=b.readLog.size();
  for(int i=0;i<3;i++){send(b.ipRx,packet(b.seq,hole1,16));b.run(10);}
@@ -30,6 +24,6 @@ static void test() {
  Bytes tail(64);for(unsigned k=0;k<tail.size();k++)tail[k]=(b.expectedTx.size()+k)*31+9;
  b.expectedTx.insert(b.expectedTx.end(),tail.begin(),tail.end());
  b.txMeta.write(appTxMeta(b.sid,tail.size()));b.run(20);send(b.appTx,tail);b.run(500);
- check(b.txPayload==7*8960+64,fmt("session did not survive the recovery",b).c_str());
+ check(b.txPayload==warm+7*8960+64,fmt("session did not survive the recovery",b).c_str());
 }
 int main(){return run_case("retransmit_two_holes",test);}

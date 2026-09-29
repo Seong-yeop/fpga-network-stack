@@ -3,8 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 width=${1:-128}; stage=${2:-csim}; selected=${3:-all}
 case "$width" in 64|128) ;; *) exit 2;; esac
-cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit retransmit_window retransmit_wrap stitch retransmit_lost retransmit_two_holes)
+cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit retransmit_window retransmit_wrap stitch)
 if [[ "$selected" != all ]]; then
+ case "$selected" in
+ retransmit_lost|retransmit_two_holes|retransmit_tail|initial_window|rto_one_segment|dupack_window|recover_gate|rtt_sample)
+  echo "Case $selected targets the reverted recovery experiments and is retained for reference." >&2; exit 2;;
+ esac
  [[ -f "cases/tb_$selected.cpp" ]] || { echo "Unknown case: $selected" >&2; exit 2; }
  cases=("$selected")
 fi

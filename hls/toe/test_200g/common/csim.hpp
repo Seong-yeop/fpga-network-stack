@@ -45,7 +45,7 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true, allowNoSpace=false;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
 #if !(RX_DDR_BYPASS)
@@ -87,7 +87,7 @@ struct Bench {
   if(cycles>=writePauseUntil && cycles%delay==0 && !writes.empty()&&!txWrite.empty()){auto a=txWrite.read();for(unsigned j=0;j<DATA_WIDTH/8;j++)if(a.keep[j])memory[writes.front().saddr.to_uint()+wo++]=a.data(j*8+7,j*8);if(a.last){check(wo==writes.front().bbt,"write length");writes.pop_front();wo=0;mmStatus s{};s.okay=1;txStatus.write(s);}}
   if(!txRC.empty()){auto c=txRC.read();reads.push_back(c);readLog.push_back(c);readCommands++;}
   if(cycles%delay==0 && !reads.empty()&&txRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=reads.front();for(unsigned j=0;j<DATA_WIDTH/8 && ro<c.bbt;j++,ro++){a.data(j*8+7,j*8)=memory.at(c.saddr.to_uint()+ro);a.keep[j]=1;}a.strb=a.keep;a.last=ro==c.bbt;txRead.write(a);if(a.last){reads.pop_front();ro=0;}}
-  if(!txRsp.empty()){auto r=txRsp.read();if(r.error!=0){static std::string m;m="TX request rejected err="+std::to_string(r.error.to_uint())+" len="+std::to_string(r.length.to_uint())+" space="+std::to_string(r.remaining_space.to_uint())+" cycle="+std::to_string(cycles);check(false,m.c_str());}}
+  if(!txRsp.empty()){auto r=txRsp.read();if(r.error==0)accepted++;if(allowNoSpace&&r.error==2)noSpace++;else if(r.error!=0){static std::string m;m="TX request rejected err="+std::to_string(r.error.to_uint())+" len="+std::to_string(r.length.to_uint())+" space="+std::to_string(r.remaining_space.to_uint())+" cycle="+std::to_string(cycles);check(false,m.c_str());}}
   if(!opened.empty()){auto r=opened.read();check(r.success,"open failed");sid=r.sessionID;openReplies++;}
   if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){check(out.size()==(expectWS?48:44),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
  }
@@ -111,6 +111,25 @@ static void receive_data(Bench &b,unsigned n) {
 static void transmit_data(Bench &b,unsigned n) {
  Bytes data(n);for(unsigned i=0;i<n;i++)data[i]=(b.expectedTx.size()+i)*31+9;
  b.expectedTx.insert(b.expectedTx.end(),data.begin(),data.end());b.txMeta.write(appTxMeta(b.sid,n));b.run(20);send(b.appTx,data);b.run(1500);check(b.txPayload==b.expectedTx.size(),"TX bytes missing");
+}
+static bool try_write(Bench &b,const Bytes &data,unsigned wait=300) {
+ unsigned a=b.accepted,n=b.noSpace;b.txMeta.write(appTxMeta(b.sid,data.size()));
+ for(unsigned i=0;i<wait&&b.accepted==a&&b.noSpace==n;i++)b.tick();
+ check(b.accepted!=a||b.noSpace!=n,"no TX status");
+ if(b.accepted!=a){send(b.appTx,data);return true;}
+ return false;
+}
+static Bytes tx_pattern(const Bench &b,unsigned n) {
+ Bytes data(n);for(unsigned k=0;k<n;k++)data[k]=(b.expectedTx.size()+k)*31+9;return data;
+}
+static void write_data(Bench &b,unsigned n,unsigned settle=150) {
+ Bytes data=tx_pattern(b,n);b.expectedTx.insert(b.expectedTx.end(),data.begin(),data.end());
+ bool allow=b.allowNoSpace;b.allowNoSpace=true;
+ for(unsigned tries=0;!try_write(b,data);tries++){check(tries<400,"TX write never accepted");b.run(100);}
+ b.allowNoSpace=allow;b.run(settle);
+}
+static unsigned warm_window(Bench &b,unsigned segs) {
+ bool ack=b.autoAck;b.autoAck=true;for(unsigned i=0;i<segs;i++)transmit_data(b,8960);b.autoAck=ack;return segs*8960;
 }
 static int run_case(const char *name,void (*test)()) {
  try {test();std::cout<<std::dec<<"PASS "<<name<<" width="<<DATA_WIDTH<<std::endl;return 0;}

@@ -17,7 +17,7 @@ static const ap_uint<32> TIME_50ms		= 1;
 static const ap_uint<32> TIME_100ms		= 1;
 static const ap_uint<32> TIME_250ms		= 1;
 static const ap_uint<32> TIME_500ms		= 1;
-static const ap_uint<32> TIME_1s		= 1;
+static const ap_uint<32> TIME_1s		= 16;
 static const ap_uint<32> TIME_5s		= 1;
 static const ap_uint<32> TIME_7s		= 2;
 static const ap_uint<32> TIME_10s		= 3;
@@ -26,8 +26,6 @@ static const ap_uint<32> TIME_20s		= 5;
 static const ap_uint<32> TIME_30s		= 6;
 static const ap_uint<32> TIME_60s		= 60;
 static const ap_uint<32> TIME_120s		= 120;
-static const ap_uint<32> TIME_FIRST_RTO	= 16;
-static const ap_uint<32> TIME_FAST_RTO	= 4;
 #else
 static const ap_uint<32> TIME_64us		= (       64.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 static const ap_uint<32> TIME_128us		= (      128.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
@@ -47,12 +45,6 @@ static const ap_uint<32> TIME_20s		= ( 20000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIO
 static const ap_uint<32> TIME_30s		= ( 30000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 static const ap_uint<32> TIME_60s		= ( 60000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 static const ap_uint<32> TIME_120s		= (120000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-#ifdef V80_FIRST_RTO_250MS
-static const ap_uint<32> TIME_FIRST_RTO	= TIME_250ms;
-#else
-static const ap_uint<32> TIME_FIRST_RTO	= TIME_1s;
-#endif
-static const ap_uint<32> TIME_FAST_RTO	= (     2000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 #endif
 
 
@@ -204,7 +196,6 @@ struct txSarEntry
 	ap_uint<32> app; // Completed buffer-write sequence, including wrap epoch.
 	ap_uint<2>	count;
 	bool		fastRetransmitted;
-	ap_uint<32> recover;
 	bool		finReady;
 	bool		finSent;
 };
@@ -289,10 +280,9 @@ struct rxTxSarReply
 	ap_uint<WINDOW_BITS> slowstart_threshold;
 	ap_uint<2>	count;
 	bool		fastRetransmitted;
-	ap_uint<32> recover;
 	rxTxSarReply() {}
-	rxTxSarReply(ap_uint<32> ack, ap_uint<32> next, ap_uint<WINDOW_BITS> cong_win, ap_uint<WINDOW_BITS> sstresh, ap_uint<2> count, bool fastRetransmitted, ap_uint<32> recover)
-			:prevAck(ack), nextByte(next), cong_window(cong_win), slowstart_threshold(sstresh), count(count), fastRetransmitted(fastRetransmitted), recover(recover) {}
+	rxTxSarReply(ap_uint<32> ack, ap_uint<32> next, ap_uint<WINDOW_BITS> cong_win, ap_uint<WINDOW_BITS> sstresh, ap_uint<2> count, bool fastRetransmitted)
+			:prevAck(ack), nextByte(next), cong_window(cong_win), slowstart_threshold(sstresh), count(count), fastRetransmitted(fastRetransmitted) {}
 };
 
 struct txAppTxSarReply
@@ -375,14 +365,11 @@ struct rxRetransmitTimerUpdate {
 struct txRetransmitTimerSet {
 	ap_uint<16> sessionID;
 	eventType	type;
-	bool		fast;
 	txRetransmitTimerSet() {}
 	txRetransmitTimerSet(ap_uint<16> id)
-				:sessionID(id), type(RT), fast(false) {} //FIXME??
+				:sessionID(id), type(RT) {} //FIXME??
 	txRetransmitTimerSet(ap_uint<16> id, eventType type)
-				:sessionID(id), type(type), fast(false) {}
-	txRetransmitTimerSet(ap_uint<16> id, eventType type, bool fast)
-				:sessionID(id), type(type), fast(fast) {}
+				:sessionID(id), type(type) {}
 };
 
 struct event

@@ -89,6 +89,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 	static extendedEvent ml_curEvent;
 	static ap_uint<32> ml_randomValue= 0x562301af; //Random seed initialization
 
+	static ap_uint<2> ml_segmentCount = 0;
 	static rxSarReply	rxSar;
 	static txTxSarReply	txSarReg;
 	ap_uint<WINDOW_BITS> slowstart_threshold;
@@ -150,6 +151,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 			ml_FsmState = 1;
 			ml_randomValue++; //make sure it doesn't become zero TODO move this out of if, but breaks my testsuite
 		} //if not empty
+		ml_segmentCount = 0;
 		break;
 	case 1:
 		switch(ml_curEvent.type)
@@ -406,10 +408,14 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					meta.length = segmentMss;
 					txSar.ackd += segmentMss;
 					txSar.usedLength -= segmentMss;
-					if (ml_curEvent.rt_count == 0)
+					// TODO replace with dynamic count, remove this
+					if (ml_segmentCount == 3)
 					{
+						// Should set a probe or sth??
+						//txEng2txSar_upd_req.write(txTxSarQuery(ml_curEvent.sessionID, txSar.not_ackd, 1));
 						ml_FsmState = 0;
 					}
+					ml_segmentCount++;
 				}
 				else
 				{
@@ -438,7 +444,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					txEng2sLookup_rev_req.write(ml_curEvent.sessionID);
 
 					// Only set RT timer if we actually send sth
-					txEng2timer_setRetransmitTimer.write(txRetransmitTimerSet(ml_curEvent.sessionID, RT, ml_curEvent.rt_count == 0));
+					txEng2timer_setRetransmitTimer.write(txRetransmitTimerSet(ml_curEvent.sessionID));
 				}
 				ml_sarLoaded = true;
 				txSarReg = txSar;

@@ -1112,11 +1112,9 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				stateTable2rxEng_upd_rsp.read(tcpState);
 				rxSar2rxEng_upd_rsp.read(rxSar);
 				txSar2rxEng_upd_rsp.read(txSar);
-				bool clearTimer = true;
-				bool partialAck = false;
+				rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, (fsm_meta.meta.ackNumb == txSar.nextByte)));
 				if (tcpState == ESTABLISHED || tcpState == SYN_RECEIVED || tcpState == FIN_WAIT_1 || tcpState == CLOSING || tcpState == LAST_ACK)
 				{
-					clearTimer = false;
 					// Check if new ACK arrived
 					if (fsm_meta.meta.ackNumb == txSar.prevAck && txSar.prevAck != txSar.nextByte)
 					{
@@ -1128,26 +1126,19 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					}
 					else
 					{
-						clearTimer = true;
+						// Notify probeTimer about new ACK
 						rxEng2timer_clearProbeTimer.write(fsm_meta.sessionID);
-						if (txSar.fastRetransmitted && ap_int<32>(fsm_meta.meta.ackNumb - txSar.recover) < 0)
+						// Check for SlowStart & Increase Congestion Window
+						if (txSar.cong_window <= (txSar.slowstart_threshold-MSS))
 						{
-							partialAck = true;
-							txSar.count = 0;
+							txSar.cong_window += MSS;
 						}
-						else
+						else if (txSar.cong_window <= CONGESTION_WINDOW_MAX) //0xF7FF
 						{
-							if (txSar.cong_window <= (txSar.slowstart_threshold-MSS))
-							{
-								txSar.cong_window += MSS;
-							}
-							else if (txSar.cong_window <= CONGESTION_WINDOW_MAX)
-							{
-								txSar.cong_window += 365;
-							}
-							txSar.count = 0;
-							txSar.fastRetransmitted = false;
+							txSar.cong_window += 365; //TODO replace by approx. of (MSS x MSS) / cong_window
 						}
+						txSar.count = 0;
+						txSar.fastRetransmitted = false;
 					}
 					// TX SAR
 					if ((txSar.prevAck <= fsm_meta.meta.ackNumb && fsm_meta.meta.ackNumb <= txSar.nextByte)
@@ -1343,7 +1334,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 
 
 #if FAST_RETRANSMIT
-					if ((txSar.count == 3 && !txSar.fastRetransmitted) || partialAck)
+					if (txSar.count == 3 && !txSar.fastRetransmitted)
 					{
 						rxEng2eventEng_setEvent.write(event(RT, fsm_meta.sessionID));
 					}
@@ -1411,10 +1402,6 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, tcpState, 1));
 				}
 				//fsm_state = LOAD;
-				if (clearTimer)
-				{
-					rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, (fsm_meta.meta.ackNumb == txSar.nextByte)));
-				}
 			}
 			break;
 		case 2: //SYN

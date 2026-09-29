@@ -73,26 +73,33 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 	static rxRetransmitTimerUpdate	rt_update;
 
 	retransmitTimerEntry	currEntry;
-	ap_uint<2> operationSwitch = 0;
+	ap_uint<1> operationSwitch = 0;
 	txRetransmitTimerSet	set;
-	ap_uint<16>				currID = rt_position;
-	bool access = false;
+	ap_uint<16>				currID;
 
-	if (rt_waitForWrite && rt_update.sessionID != rt_prevPosition)
+	if (rt_waitForWrite && rt_update.sessionID != rt_prevPosition) //TODO maybe prevprev too
 	{
-		currID = rt_update.sessionID;
-		operationSwitch = 2;
-		access = true;
+		if (!rt_update.stop)
+		{
+			retransmitTimerTable[rt_update.sessionID].time = TIME_1s;
+		}
+		else
+		{
+			retransmitTimerTable[rt_update.sessionID].time = 0;
+			retransmitTimerTable[rt_update.sessionID].active = false;
+		}
+		retransmitTimerTable[rt_update.sessionID].retries = 0;
 		rt_waitForWrite = false;
 	}
-	else if (!rxEng2timer_clearRetransmitTimer.empty() && !rt_waitForWrite)
+	else if (!rxEng2timer_clearRetransmitTimer.empty() && !rt_waitForWrite) //FIXME rx path has priority over tx path
 	{
 		rxEng2timer_clearRetransmitTimer.read(rt_update);
 		rt_waitForWrite = true;
 	}
 	else
 	{
-		access = true;
+		currID = rt_position;
+
 		if (!txEng2timer_setRetransmitTimer.empty())
 		{
 			txEng2timer_setRetransmitTimer.read(set);
@@ -105,6 +112,7 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 		}
 		else
 		{
+			// increment position
 			rt_position++;
 			if (rt_position >= MAX_SESSIONS)
 			{
@@ -112,51 +120,31 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 			}
 			operationSwitch = 0;
 		}
-	}
-	if (access)
-	{
+
+		// Get entry from table
 		currEntry = retransmitTimerTable[currID];
 		switch (operationSwitch)
 		{
-		case 2:
-			if (!rt_update.stop)
-			{
-				currEntry.time = TIME_FIRST_RTO;
-			}
-			else
-			{
-				currEntry.time = 0;
-				currEntry.active = false;
-			}
-			currEntry.retries = 0;
-			currEntry.fast = false;
-			currEntry.ftime = 0;
-			break;
 		case 1:
 			currEntry.type = set.type;
-			if (set.fast)
-			{
-				currEntry.ftime = TIME_FAST_RTO;
-				currEntry.fast = true;
-			}
 			if (!currEntry.active)
 			{
 				switch(currEntry.retries)
 				{
 				case 0:
-					currEntry.time = TIME_FIRST_RTO;
+					currEntry.time = TIME_1s; //TIME_5s;
 					break;
 				case 1:
-					currEntry.time = TIME_5s;
+					currEntry.time = TIME_5s; //TIME_7s;
 					break;
 				case 2:
-					currEntry.time = TIME_10s;
+					currEntry.time = TIME_10s; //TIME_15s;
 					break;
 				case 3:
-					currEntry.time = TIME_15s;
+					currEntry.time = TIME_15s; //TIME_20s;
 					break;
 				default:
-					currEntry.time = TIME_30s;
+					currEntry.time = TIME_30s; //TIME_30s;
 					break;
 				}
 			}
@@ -168,24 +156,13 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 				if (currEntry.time > 0)
 				{
 					currEntry.time--;
-					if (currEntry.fast)
-					{
-						if (currEntry.ftime > 0)
-						{
-							currEntry.ftime--;
-						}
-						else if (!rtTimer2eventEng_setEvent.full())
-						{
-							currEntry.fast = false;
-							rtTimer2eventEng_setEvent.write(event(currEntry.type, currID, 0));
-						}
-					}
 				}
+				// We need to check if we can generate another event, otherwise we might end up in a Deadlock,
+				// since the TX Engine will not be able to set new retransmit timers
 				else if (!rtTimer2eventEng_setEvent.full())
 				{
 					currEntry.time = 0;
 					currEntry.active = false;
-					currEntry.fast = false;
 					if (currEntry.retries < 4)
 					{
 						currEntry.retries++;
@@ -201,13 +178,14 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 						}
 						else
 						{
-							rtTimer2rxApp_notification.write(appNotification(currID, true));
+							rtTimer2rxApp_notification.write(appNotification(currID, true)); //TIME_OUT
 						}
 					}
 				}
-			}
+			} //if active
 			break;
-		}
+		} //switch
+		// write entry back
 		retransmitTimerTable[currID] = currEntry;
 		rt_prevPosition = currID;
 	}
