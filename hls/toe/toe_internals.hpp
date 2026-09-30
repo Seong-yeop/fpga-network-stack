@@ -133,6 +133,7 @@ struct rxSarEntry
 	ap_uint<32> head;
 	ap_uint<32> offset;
 	bool gap;
+	bool sack_ok;
 #ifdef V80_RX_MEM_NO_SPLIT
 	ap_uint<WINDOW_BITS> released;
 #endif
@@ -146,12 +147,13 @@ struct rxSarReply
 #endif
 	ap_uint<16>	windowSize;
 	ap_uint<WINDOW_BITS>	usedLength;
+	bool sack_ok;
 	rxSarReply() {}
 	rxSarReply(rxSarEntry entry)
 #if !(WINDOW_SCALE)
-		:recvd(entry.recvd) {}
+		:recvd(entry.recvd), sack_ok(entry.sack_ok) {}
 #else
-		:recvd(entry.recvd), win_shift(entry.win_shift) {}
+		:recvd(entry.recvd), win_shift(entry.win_shift), sack_ok(entry.sack_ok) {}
 #endif
 };
 
@@ -165,18 +167,16 @@ struct rxSarRecvd
 	ap_uint<32> head;
 	ap_uint<32> offset;
 	bool gap;
+	bool sack_ok;
 	rxSarRecvd() {}
 	rxSarRecvd(ap_uint<16> id)
-				:sessionID(id), recvd(0), write(0), init(0) {}
+				:sessionID(id), recvd(0), write(0), init(0), sack_ok(false) {}
 	rxSarRecvd(ap_uint<16> id, ap_uint<32> recvd)
-				:sessionID(id), recvd(recvd), head(0), offset(0), gap(0), write(1), init(0) {}
-	// rxSarRecvd(ap_uint<16> id, ap_uint<32> recvd, ap_uint<4> win_shift)
-	// 				:sessionID(id), recvd(recvd), win_shift(win_shift), write(1), init(1) {}
-
+				:sessionID(id), recvd(recvd), head(0), offset(0), gap(0), sack_ok(false), write(1), init(0) {}
 	rxSarRecvd(ap_uint<16> id, ap_uint<32> recvd, ap_uint<32> head, ap_uint<32>offset, bool gap)
-				:sessionID(id), recvd(recvd), head(head), offset(offset), gap(gap), write(1), init(0) {}
-	rxSarRecvd(ap_uint<16> id, ap_uint<32> recvd, ap_uint<32> head, ap_uint<32>offset, bool gap, ap_uint<4> win_shift)
-				:sessionID(id), recvd(recvd), head(head), offset(offset), gap(gap), win_shift(win_shift), write(1), init(1) {}
+				:sessionID(id), recvd(recvd), head(head), offset(offset), gap(gap), sack_ok(false), write(1), init(0) {}
+	rxSarRecvd(ap_uint<16> id, ap_uint<32> recvd, ap_uint<32> head, ap_uint<32>offset, bool gap, ap_uint<4> win_shift, bool sack_ok=false)
+				:sessionID(id), recvd(recvd), head(head), offset(offset), gap(gap), sack_ok(sack_ok), win_shift(win_shift), write(1), init(1) {}
 };
 
 struct rxSarAppd
@@ -399,6 +399,35 @@ struct txRetransmitTimerSet {
 				:sessionID(id), type(RT) {} //FIXME??
 	txRetransmitTimerSet(ap_uint<16> id, eventType type)
 				:sessionID(id), type(type) {}
+};
+
+struct sackRequest {
+	ap_uint<16> sessionID;
+	ap_uint<32> ack;
+	ap_uint<3> count;
+	ap_uint<256> blocks;
+	ap_uint<1> init;
+	sackRequest() {}
+	sackRequest(ap_uint<16> id)
+				:sessionID(id), ack(0), count(0), blocks(0), init(1) {}
+	sackRequest(ap_uint<16> id, ap_uint<32> ack, ap_uint<3> count, ap_uint<256> blocks)
+				:sessionID(id), ack(ack), count(count), blocks(blocks), init(0) {}
+};
+
+struct sackReply {
+	ap_uint<3> valid;
+	ap_uint<32> left0;
+	ap_uint<32> right0;
+	ap_uint<32> left1;
+	ap_uint<32> right1;
+	ap_uint<32> left2;
+	ap_uint<32> right2;
+	ap_uint<WINDOW_BITS> sacked;
+	ap_uint<2> distinct;
+	bool newData;
+	sackReply() {}
+	sackReply(ap_uint<3> valid, ap_uint<32> l0, ap_uint<32> r0, ap_uint<32> l1, ap_uint<32> r1, ap_uint<32> l2, ap_uint<32> r2, ap_uint<WINDOW_BITS> sacked, ap_uint<2> distinct, bool newData)
+				:valid(valid), left0(l0), right0(r0), left1(l1), right1(r1), left2(l2), right2(r2), sacked(sacked), distinct(distinct), newData(newData) {}
 };
 
 struct event

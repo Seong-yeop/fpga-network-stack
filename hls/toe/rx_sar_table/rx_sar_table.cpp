@@ -166,6 +166,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 			rx_table[in_recvd.sessionID].gap = in_recvd.gap;
 			if (in_recvd.init)
 			{
+				rx_table[in_recvd.sessionID].sack_ok = in_recvd.sack_ok;
 				rx_table[in_recvd.sessionID].appd = in_recvd.recvd;
 #ifdef V80_RX_MEM_NO_SPLIT
 				rx_table[in_recvd.sessionID].released = in_recvd.recvd;

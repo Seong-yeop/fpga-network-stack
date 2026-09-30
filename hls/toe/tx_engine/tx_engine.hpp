@@ -46,11 +46,12 @@ struct tx_engine_meta //same as rxEngine
 	ap_uint<1>	rst;
 	ap_uint<1>	syn;
 	ap_uint<1>	fin;
+	ap_uint<1>	sack_permitted;
 	tx_engine_meta() {}
 	tx_engine_meta(ap_uint<1> ack, ap_uint<1> rst, ap_uint<1> syn, ap_uint<1> fin)
-			:seqNumb(0), ackNumb(0), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin) {}
+			:seqNumb(0), ackNumb(0), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0) {}
 	tx_engine_meta(ap_uint<32> seqNumb, ap_uint<32> ackNumb, ap_uint<1> ack, ap_uint<1> rst, ap_uint<1> syn, ap_uint<1> fin)
-			:seqNumb(seqNumb), ackNumb(ackNumb), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin) {}
+			:seqNumb(seqNumb), ackNumb(ackNumb), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0) {}
 };
 
 /** @ingroup tx_engine
@@ -87,6 +88,7 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 				stream<txTxSarQuery>&			txEng2txSar_upd_req,
 				stream<txRetransmitTimerSet>&	txEng2timer_setRetransmitTimer,
 				stream<ap_uint<16> >&			txEng2timer_setProbeTimer,
+				stream<ap_uint<16> >&			txEng2sack_clear,
 				stream<mmCmd>&					txBufferReadCmd,
 				stream<ap_uint<16> >&			txEng2sLookup_rev_req,
 				stream<net_axis<WIDTH> >&			ipTxData,

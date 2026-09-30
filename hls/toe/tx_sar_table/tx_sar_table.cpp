@@ -203,7 +203,10 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 			tx_table[tst_rxEngUpdate.sessionID].cong_window = tst_rxEngUpdate.cong_window;
 			tx_table[tst_rxEngUpdate.sessionID].count = tst_rxEngUpdate.count;
 			tx_table[tst_rxEngUpdate.sessionID].fastRetransmitted = tst_rxEngUpdate.fastRetransmitted;
-			tx_table[tst_rxEngUpdate.sessionID].recover = tst_rxEngUpdate.recover;
+			if (!tst_rxEngUpdate.init)
+			{
+				tx_table[tst_rxEngUpdate.sessionID].recover = tst_rxEngUpdate.recover;
+			}
 			if (tst_rxEngUpdate.recovery)
 			{
 				tx_table[tst_rxEngUpdate.sessionID].loss = tst_rxEngUpdate.loss;

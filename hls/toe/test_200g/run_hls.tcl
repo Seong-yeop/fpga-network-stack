@@ -21,7 +21,7 @@ if {$case_name ne ""} {
 } else {set project $here/work_$width}
 open_project $project
 set_top toe
-foreach src {../axi_utils.cpp ack_delay/ack_delay.cpp close_timer/close_timer.cpp event_engine/event_engine.cpp port_table/port_table.cpp probe_timer/probe_timer.cpp retransmit_timer/retransmit_timer.cpp rx_app_if/rx_app_if.cpp rx_app_stream_if/rx_app_stream_if.cpp rx_engine/rx_engine.cpp rx_sar_table/rx_sar_table.cpp session_lookup_controller/session_lookup_controller.cpp state_table/state_table.cpp tx_app_if/tx_app_if.cpp tx_app_stream_if/tx_app_stream_if.cpp tx_engine/tx_engine.cpp tx_sar_table/tx_sar_table.cpp tx_app_interface/tx_app_interface.cpp toe.cpp} {
+foreach src {../axi_utils.cpp ack_delay/ack_delay.cpp close_timer/close_timer.cpp event_engine/event_engine.cpp port_table/port_table.cpp probe_timer/probe_timer.cpp retransmit_timer/retransmit_timer.cpp rx_app_if/rx_app_if.cpp rx_app_stream_if/rx_app_stream_if.cpp rx_engine/rx_engine.cpp rx_sar_table/rx_sar_table.cpp sack_scoreboard/sack_scoreboard.cpp session_lookup_controller/session_lookup_controller.cpp state_table/state_table.cpp tx_app_if/tx_app_if.cpp tx_app_stream_if/tx_app_stream_if.cpp tx_engine/tx_engine.cpp tx_sar_table/tx_sar_table.cpp tx_app_interface/tx_app_interface.cpp toe.cpp} {
     add_files [file normalize $root/$src] -cflags $flags
 }
 if {$case_name eq ""} {add_files -tb $here/tb_csim.cpp -cflags $flags} else {add_files -tb $project/selected_tb.cpp -cflags $flags}

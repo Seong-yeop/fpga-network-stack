@@ -33,6 +33,7 @@ add_vitis_ip(${PROJECT_NAME}
                     "rx_app_stream_if/rx_app_stream_if.cpp"
                     "rx_engine/rx_engine.cpp"
                     "rx_sar_table/rx_sar_table.cpp"
+                    "sack_scoreboard/sack_scoreboard.cpp"
                     "session_lookup_controller/session_lookup_controller.cpp"
                     "state_table/state_table.cpp"
                     "tx_app_if/tx_app_if.cpp"

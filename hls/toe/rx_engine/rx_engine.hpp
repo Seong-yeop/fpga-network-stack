@@ -50,6 +50,16 @@ struct pseudoMeta
 /** @ingroup rx_engine
  *  @TODO check if same as in Tx engine
  */
+struct rxTcpOptions
+{
+	ap_uint<4>	winScale;
+	ap_uint<1>	sackOk;
+	ap_uint<3>	sackCount;
+	ap_uint<256> sack;
+	rxTcpOptions()
+		:winScale(0), sackOk(0), sackCount(0), sack(0) {}
+};
+
 struct rxEngineMetaData
 {
 	//ap_uint<16> sessionID;
@@ -65,6 +75,9 @@ struct rxEngineMetaData
 	ap_uint<1>	syn;
 	ap_uint<1>	fin;
 	ap_uint<4>	dataOffset;
+	ap_uint<1>	sackOk;
+	ap_uint<3>	sackCount;
+	ap_uint<256> sack;
 	//ap_uint<16> dstPort;
 };
 
@@ -103,6 +116,8 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<ap_uint<16> >&				rxEng2portTable_req,
 				stream<rxSarRecvd>&					rxEng2rxSar_upd_req,
 				stream<rxTxSarQuery>&				rxEng2txSar_upd_req,
+				stream<sackRequest>&				rxEng2sack_req,
+				stream<sackReply>&				sack2rxEng_rsp,
 				stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitTimer,
 				stream<ap_uint<16> >&				rxEng2timer_clearProbeTimer,
 				stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,

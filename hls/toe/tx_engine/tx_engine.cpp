@@ -60,6 +60,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				hls::stream<txTxSarQuery>&				txEng2txSar_upd_req,
 				hls::stream<txRetransmitTimerSet>&		txEng2timer_setRetransmitTimer,
 				hls::stream<ap_uint<16> >&				txEng2timer_setProbeTimer,
+				hls::stream<ap_uint<16> >&				txEng2sack_clear,
 				hls::stream<ap_uint<16> >&				txEng_ipMetaFifoOut,
 				hls::stream<tx_engine_meta>&			txEng_tcpMetaFifoOut,
 				hls::stream<mmCmd>&						txBufferReadCmd,
@@ -392,6 +393,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 						slowstart_threshold = (2 * segmentMss);
 					}
 					txEng2txSar_upd_req.write(txTxSarRtQuery(ml_curEvent.sessionID, slowstart_threshold, ml_curEvent.rt_count == 1));
+					txEng2sack_clear.write(ml_curEvent.sessionID);
 				}
 
 				if (currLength == 0)
@@ -499,13 +501,14 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				meta.ackNumb = 0;
 				//meta.seqNumb = txSar.not_ackd;
 				meta.window_size = 0xFFFF;
-				meta.length = 4; // For MSS Option, 4 bytes
+				meta.length = 8;
 				meta.ack = 0;
 				meta.rst = 0;
 				meta.syn = 1;
 				meta.fin = 0;
+				meta.sack_permitted = 1;
 #if (WINDOW_SCALE)
-				meta.length = 8;
+				meta.length = 12;
 				meta.win_shift = WINDOW_SCALE_BITS;
 #endif
 
@@ -558,11 +561,15 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					txEng2txSar_upd_req.write(txTxSarQuery(ml_curEvent.sessionID, txSar.not_ackd+1, 1, 1));
 				}
 
-#if (WINDOW_SCALE)
-				// An additional 4 bytes for WScale option -> total: 8 bytes
-				if (rxSar.win_shift != 0)
+				meta.sack_permitted = rxSar.sack_ok ? 1 : 0;
+				if (rxSar.sack_ok)
 				{
 					meta.length = 8;
+				}
+#if (WINDOW_SCALE)
+				if (rxSar.win_shift != 0)
+				{
+					meta.length = rxSar.sack_ok ? 12 : 8;
 				}
 				meta.win_shift = rxSar.win_shift;
 #endif
@@ -1054,6 +1061,7 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 	static bool hasBody = false;
 	static bool isSYN = false;
 	static ap_uint<4> win_shift = 0;
+	static ap_uint<1> sackPermitted = 0;
 
 	switch (state)
 	{
@@ -1071,26 +1079,18 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 			header.setDstPort(tuple.dstPort);
 			header.setSeqNumb(meta.seqNumb);
 			header.setAckNumb(meta.ackNumb);
-#if !(WINDOW_SCALE)
-			header.setDataOffset(0x5 + meta.syn);
-#else
+#if (WINDOW_SCALE)
 			win_shift = meta.win_shift;
+#endif
+			sackPermitted = meta.sack_permitted;
 			if (meta.syn)
 			{
-				if (meta.win_shift != 0)
-				{
-					header.setDataOffset(0x7);
-				}
-				else
-				{
-					header.setDataOffset(0x6);
-				}
+				header.setDataOffset(0x5 + (meta.length >> 2));
 			}
 			else
 			{
 				header.setDataOffset(0x5);
 			}
-#endif
 			//flags
 			header.setFinFlag(meta.fin);
 			header.setSynFlag(meta.syn);
@@ -1160,18 +1160,37 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 			sendWord.data(511, 288) = 0;
 #endif
 			sendWord.keep(35,32) = 0xF;
+			ap_uint<10> optionBit = 288;
 #if (WINDOW_SCALE)
-			// WSopt negotiation, only send in SYN-ACK if received with SYN as in RFC 7323 1.3
-			// std::cout << "PSEUDO NEW: " << win_shift << std::endl;
 			if (win_shift != 0)
 			{
-				sendWord.data(295, 288) = 0x03; // Option Kind
-				sendWord.data(303, 296) = 0x03; // Option length
+				sendWord.data(295, 288) = 0x03;
+				sendWord.data(303, 296) = 0x03;
 				sendWord.data(311, 304) = win_shift;
-				sendWord.data(319, 312) = 0x0; // End of option list
+				sendWord.data(319, 312) = sackPermitted ? 0x04 : 0x00;
 				sendWord.keep(39, 36) = 0xF;
+				optionBit = 320;
 			}
 #endif
+			if (sackPermitted)
+			{
+				if (optionBit == 320)
+				{
+					sendWord.data(327, 320) = 0x02;
+					sendWord.data(335, 328) = 0x01;
+					sendWord.data(343, 336) = 0x01;
+					sendWord.data(351, 344) = 0x01;
+					sendWord.keep(43, 40) = 0xF;
+				}
+				else
+				{
+					sendWord.data(295, 288) = 0x04;
+					sendWord.data(303, 296) = 0x02;
+					sendWord.data(311, 304) = 0x01;
+					sendWord.data(319, 312) = 0x01;
+					sendWord.keep(39, 36) = 0xF;
+				}
+			}
 		}
 
 		dataOut.write(sendWord);
@@ -1213,18 +1232,37 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 #ifndef __SYNTHESIS__
 		sendWord.data(63, 32) = 0;
 #endif
+		ap_uint<10> optionBit = 32;
 #if (WINDOW_SCALE)
-		// WSopt negotiation, only send in SYN-ACK if received with SYN as in RFC 7323 1.3
-		// std::cout << "PSEUDO NEW: " << win_shift << std::endl;
 		if (win_shift != 0)
 		{
-			sendWord.data(39, 32) = 0x03; // Option Kind
-			sendWord.data(47, 40) = 0x03; // Option length
+			sendWord.data(39, 32) = 0x03;
+			sendWord.data(47, 40) = 0x03;
 			sendWord.data(55, 48) = win_shift;
-			sendWord.data(63, 56) = 0x0; // End of option list
+			sendWord.data(63, 56) = sackPermitted ? 0x04 : 0x00;
 			sendWord.keep = 0xFF;
+			optionBit = 64;
 		}
 #endif
+		if (sackPermitted)
+		{
+			if (optionBit == 64)
+			{
+				sendWord.data(71, 64) = 0x02;
+				sendWord.data(79, 72) = 0x01;
+				sendWord.data(87, 80) = 0x01;
+				sendWord.data(95, 88) = 0x01;
+				sendWord.keep = 0xFFF;
+			}
+			else
+			{
+				sendWord.data(39, 32) = 0x04;
+				sendWord.data(47, 40) = 0x02;
+				sendWord.data(55, 48) = 0x01;
+				sendWord.data(63, 56) = 0x01;
+				sendWord.keep = 0xFF;
+			}
+		}
 		sendWord.last = 1;
 
 		dataOut.write(sendWord);
@@ -1661,6 +1699,7 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 				stream<txTxSarQuery>&			txEng2txSar_upd_req,
 				stream<txRetransmitTimerSet>&	txEng2timer_setRetransmitTimer,
 				stream<ap_uint<16> >&			txEng2timer_setProbeTimer,
+				stream<ap_uint<16> >&			txEng2sack_clear,
 				stream<mmCmd>&					txBufferReadCmd,
 				stream<ap_uint<16> >&			txEng2sLookup_rev_req,
 				stream<net_axis<WIDTH> >&				ipTxData,
@@ -1751,6 +1790,7 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 				txEng2txSar_upd_req,
 				txEng2timer_setRetransmitTimer,
 				txEng2timer_setProbeTimer,
+				txEng2sack_clear,
 				txEng_ipMetaFifo,
 				txEng_tcpMetaFifo,
 				txMetaloader2memAccessBreakdown,
@@ -1817,6 +1857,7 @@ template void tx_engine<DATA_WIDTH>(	stream<extendedEvent>&			eventEng2txEng_eve
 				stream<txTxSarQuery>&			txEng2txSar_upd_req,
 				stream<txRetransmitTimerSet>&	txEng2timer_setRetransmitTimer,
 				stream<ap_uint<16> >&			txEng2timer_setProbeTimer,
+				stream<ap_uint<16> >&			txEng2sack_clear,
 				stream<mmCmd>&					txBufferReadCmd,
 				stream<ap_uint<16> >&			txEng2sLookup_rev_req,
 				stream<net_axis<DATA_WIDTH> >&				ipTxData,

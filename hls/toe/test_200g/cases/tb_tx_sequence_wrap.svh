@@ -7,11 +7,11 @@ task automatic send_tx(input logic [52:0] q);
  repeat(8)@(negedge ap_clk);
 endtask
 initial begin
- logic [52:0] tq;logic [90:0] rq;
+ logic [52:0] tq;logic [142:0] rq;
  component_defaults();ap_rst=1;repeat(10)@(negedge ap_clk);ap_rst=0;
  tq=0;tq[15:0]=7;tq[47:16]=32'hfffffff0;tq[48]=1;tq[49]=1;send_tx(tq);
  tq[47:16]=32'h80;tq[49]=0;send_tx(tq);
- rq=0;rq[15:0]=7;rq[47:16]=32'h40;rq[63:48]=65535;rq[81:64]=14600;rq[88:85]=3;rq[89]=1;rq[90]=1;
+ rq=0;rq[15:0]=7;rq[47:16]=32'h40;rq[63:48]=65535;rq[81:64]=14600;rq[140:137]=3;rq[141]=1;rq[142]=1;
  rxEng2txSar_upd_req_dout=rq;rxEng2txSar_upd_req_empty_n=1;
  do @(posedge ap_clk);while(!rxEng2txSar_upd_req_read);
  @(negedge ap_clk);rxEng2txSar_upd_req_empty_n=0;repeat(8)@(negedge ap_clk);

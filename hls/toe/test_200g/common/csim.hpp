@@ -45,7 +45,7 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, autoAck=true, allowNoSpace=false;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, sackOk=false, autoAck=true, allowNoSpace=false;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
 #if !(RX_DDR_BYPASS)
@@ -89,7 +89,7 @@ struct Bench {
   if(cycles%delay==0 && !reads.empty()&&txRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=reads.front();for(unsigned j=0;j<DATA_WIDTH/8 && ro<c.bbt;j++,ro++){a.data(j*8+7,j*8)=memory.at(c.saddr.to_uint()+ro);a.keep[j]=1;}a.strb=a.keep;a.last=ro==c.bbt;txRead.write(a);if(a.last){reads.pop_front();ro=0;}}
   if(!txRsp.empty()){auto r=txRsp.read();if(r.error==0)accepted++;if(allowNoSpace&&r.error==2)noSpace++;else if(r.error!=0){static std::string m;m="TX request rejected err="+std::to_string(r.error.to_uint())+" len="+std::to_string(r.length.to_uint())+" space="+std::to_string(r.remaining_space.to_uint())+" cycle="+std::to_string(cycles);check(false,m.c_str());}}
   if(!opened.empty()){auto r=opened.read();check(r.success,"open failed");sid=r.sessionID;openReplies++;}
-  if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){check(out.size()==(expectWS?48:44),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
+  if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){bool synAck=out[33]&16;bool sack=synAck?sackOk:true;check(out.size()==44+(expectWS?4:0)+(sack?4:0),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");unsigned sp=expectWS?47:44;check(sack?(out[sp]==4&&out[sp+1]==2):(out.size()<=48&&(!expectWS||out[47]==0)),"SYN SACK-permitted option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
  }
  void run(unsigned n){for(unsigned i=0;i<n;i++)tick();}
 };
@@ -99,9 +99,18 @@ static Bytes resign(Bytes b) {
  Bytes p(b.begin()+12,b.begin()+20);p.push_back(0);p.push_back(6);p.push_back((b.size()-20)>>8);p.push_back(b.size()-20);
  p.insert(p.end(),b.begin()+20,b.end());put(b,36,checksum(p));put(b,10,checksum(Bytes(b.begin(),b.begin()+20)));return b;
 }
-static void connect_passive(Bench &b,unsigned isn=1000,bool ws=true) {
- b.expectWS=ws;b.seq=isn+1;b.listen.write(5001);b.run(40000);check(!b.listened.empty()&&b.listened.read(),"listen timeout");
- Bytes syn=packet(isn,0,2,{},true);if(!ws){syn.resize(44);syn[32]=6<<4;syn=resign(syn);}send(b.ipRx,syn);
+static Bytes packet_syn(unsigned seq,bool sackOk=true,int ws=3,unsigned dstPort=5001) {
+ Bytes opt={2,4,0x23,0x00};if(ws>=0){opt.push_back(3);opt.push_back(3);opt.push_back(ws);}if(sackOk){opt.push_back(4);opt.push_back(2);}while(opt.size()%4)opt.push_back(1);
+ Bytes b=packet(seq,0,2,{},false,dstPort);b.insert(b.begin()+40,opt.begin(),opt.end());b[32]=(5+opt.size()/4)<<4;return resign(b);
+}
+static Bytes packet_sack(unsigned seq,unsigned ack,const std::vector<std::pair<unsigned,unsigned>> &blocks,const Bytes &payload={},unsigned dstPort=5001) {
+ Bytes opt={1,1,5,(unsigned char)(2+8*blocks.size())};
+ for(auto &bl:blocks){for(int i=3;i>=0;i--)opt.push_back(bl.first>>(8*i));for(int i=3;i>=0;i--)opt.push_back(bl.second>>(8*i));}
+ Bytes b=packet(seq,ack,payload.empty()?16:24,payload,false,dstPort);b.insert(b.begin()+40,opt.begin(),opt.end());b[32]=(5+opt.size()/4)<<4;return resign(b);
+}
+static void connect_passive(Bench &b,unsigned isn=1000,bool ws=true,bool sack=false) {
+ b.expectWS=ws;b.sackOk=sack;b.seq=isn+1;b.listen.write(5001);b.run(40000);check(!b.listened.empty()&&b.listened.read(),"listen timeout");
+ Bytes syn=sack?packet_syn(isn,true,ws?3:-1):packet(isn,0,2,{},true);if(!sack&&!ws){syn.resize(44);syn[32]=6<<4;syn=resign(syn);}send(b.ipRx,syn);
  b.run(1000);check(b.synack,"SYN-ACK timeout");send(b.ipRx,packet(b.seq,b.ack,16));b.run(300);b.packets.clear();
 }
 static void receive_data(Bench &b,unsigned n) {

@@ -558,17 +558,12 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 			}
 			else
 			{
-				//TODO only works for 512
 #if (WINDOW_SCALE)
-				if (meta.syn)
+				parseHeader = true;
+				dataOffsetOut.write(dataOffset);
+				if (optionalHeader.isReady() || currWord.last)
 				{
-					parseHeader = true;
-					// std::cout << "WRITE Optional Fields" << std::endl;
-					dataOffsetOut.write(dataOffset);
-					if (optionalHeader.isReady() || currWord.last)
-					{
-						optionalHeaderFieldsOut.write(optionalHeader.getRawHeader());
-					}
+					optionalHeaderFieldsOut.write(optionalHeader.getRawHeader());
 				}
 #endif
 			}
@@ -660,7 +655,7 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
  */
 void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 												hls::stream<ap_uint<320> >&	optionalHeaderFieldsIn,
-												hls::stream<ap_uint<4> >&		windowScaleOut)
+												hls::stream<rxTcpOptions>&		optionsOut)
 {
 	#pragma HLS PIPELINE II=1
 	#pragma HLS INLINE off
@@ -670,15 +665,22 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 	static ap_uint<6> remainingBytes;
 	static ap_uint<320> fields;
 	static ap_uint<6> shiftBytes;
+	static ap_uint<4> optWinScale = 0;
+	static ap_uint<1> optSackOk = 0;
+	static ap_uint<3> optSackCount = 0;
+	static ap_uint<64> optSack0 = 0, optSack1 = 0, optSack2 = 0, optSack3 = 0;
 
 	switch (state)
 	{
 	case IDLE:
 		if (!dataOffsetIn.empty() && !optionalHeaderFieldsIn.empty())
 		{
-			// std::cout << "PARSE IDLE" << std::endl;
 			remainingBytes = ((ap_uint<6>)dataOffsetIn.read()) * 4;
 			optionalHeaderFieldsIn.read(fields);
+			optWinScale = 0;
+			optSackOk = 0;
+			optSackCount = 0;
+			optSack0 = 0; optSack1 = 0; optSack2 = 0; optSack3 = 0;
 			state = PARSE;
 		}
 		break;
@@ -686,47 +688,60 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 	{
 		ap_uint<8> optionKind = fields(7, 0);
 		ap_uint<8> optionLength = fields(15, 8);
-
-		// Options are byte-sized; an invalid length must not trap this FSM.
-		if (remainingBytes == 0 ||
+		ap_uint<3> sackBlocks = optionLength(5, 3);
+		bool sackLengthOk = optionLength >= 10 && optionLength <= 34 && optionLength(2, 0) == 2;
+		ap_uint<64> block0 = (reverse((ap_uint<32>)fields(79, 48)), reverse((ap_uint<32>)fields(47, 16)));
+		ap_uint<64> block1 = (reverse((ap_uint<32>)fields(143, 112)), reverse((ap_uint<32>)fields(111, 80)));
+		ap_uint<64> block2 = (reverse((ap_uint<32>)fields(207, 176)), reverse((ap_uint<32>)fields(175, 144)));
+		ap_uint<64> block3 = (reverse((ap_uint<32>)fields(271, 240)), reverse((ap_uint<32>)fields(239, 208)));
+		bool invalid = remainingBytes == 0 ||
 			(optionKind > 1 && (optionLength < 2 || optionLength > remainingBytes)) ||
-			(optionKind == 3 && optionLength != 3))
+			(optionKind == 3 && optionLength != 3) ||
+			(optionKind == 4 && optionLength != 2) ||
+			(optionKind == 5 && !sackLengthOk);
+		bool last = invalid || optionKind == 0 || (optionKind != 1 && remainingBytes == optionLength);
+		if (!invalid)
 		{
-			windowScaleOut.write(0);
-			state = IDLE;
-			break;
-		}
-
-		switch (optionKind)
-		{
-		case 0: //End of option list
-			windowScaleOut.write(0);
-			// std::cout << "PARSE EOL" << std::endl;
-			state = IDLE;
-			break;
-		case 1:
-			shiftBytes = 1;
-			state = SHIFT;
-			break;
-		case 3:
-			// std::cout << "PARSE WS: " << (uint16_t)fields(19, 16) << std::endl;
-			windowScaleOut.write(fields(19, 16));
-			state = IDLE;
-			break;
-		default:
-			if (remainingBytes == optionLength)
+			switch (optionKind)
 			{
-				windowScaleOut.write(0);
-				// std::cout << "PARSE DONE" << std::endl;
-				state = IDLE;
-			}
-			else
-			{
+			case 1:
+				shiftBytes = 1;
+				break;
+			case 3:
+				optWinScale = fields(19, 16);
 				shiftBytes = optionLength;
-				state = SHIFT;
+				break;
+			case 4:
+				optSackOk = 1;
+				shiftBytes = optionLength;
+				break;
+			case 5:
+				optSackCount = sackBlocks;
+				optSack0 = block0;
+				optSack1 = (sackBlocks >= 2) ? block1 : ap_uint<64>(0);
+				optSack2 = (sackBlocks >= 3) ? block2 : ap_uint<64>(0);
+				optSack3 = (sackBlocks == 4) ? block3 : ap_uint<64>(0);
+				shiftBytes = optionLength;
+				break;
+			default:
+				shiftBytes = optionLength;
+				break;
 			}
-			break;
-		}//switch
+		}
+		if (last)
+		{
+			rxTcpOptions options;
+			options.winScale = optWinScale;
+			options.sackOk = optSackOk;
+			options.sackCount = optSackCount;
+			options.sack = (optSack3, optSack2, optSack1, optSack0);
+			optionsOut.write(options);
+			state = IDLE;
+		}
+		else
+		{
+			state = SHIFT;
+		}
 		break;
 	}
 	case SHIFT:
@@ -737,7 +752,7 @@ void parse_optional_header_fields(	hls::stream<ap_uint<4> >&		dataOffsetIn,
 	}//switch
 }
 
-void merge_header_meta(hls::stream<ap_uint<4> >&			rxEng_winScaleFifo,
+void merge_header_meta(hls::stream<rxTcpOptions>&			rxEng_optionsFifo,
 								hls::stream<rxEngineMetaData>&	rxEng_headerMetaFifo,
 								hls::stream<rxEngineMetaData>& 	rxEng_metaDataFifo)
 {
@@ -752,24 +767,29 @@ void merge_header_meta(hls::stream<ap_uint<4> >&			rxEng_winScaleFifo,
 	case 0:
 		if (!rxEng_headerMetaFifo.empty())
 		{
-			// std::cout << "META MERGE 0" << std::endl;
 			rxEng_headerMetaFifo.read(meta);
-			if (meta.syn && meta.dataOffset > 5)
+			if (meta.dataOffset > 5)
 			{
 				state = 1;
 			}
 			else
 			{
 				meta.winScale = 0;
+				meta.sackOk = 0;
+				meta.sackCount = 0;
+				meta.sack = 0;
 				rxEng_metaDataFifo.write(meta);
 			}
 		}
 		break;
 	case 1:
-		if (!rxEng_winScaleFifo.empty())
+		if (!rxEng_optionsFifo.empty())
 		{
-			// std::cout << "META MERGE 1" << std::endl;
-			meta.winScale = rxEng_winScaleFifo.read();
+			rxTcpOptions options = rxEng_optionsFifo.read();
+			meta.winScale = meta.syn ? options.winScale : ap_uint<4>(0);
+			meta.sackOk = meta.syn ? options.sackOk : ap_uint<1>(0);
+			meta.sackCount = options.sackCount;
+			meta.sack = options.sack;
 			rxEng_metaDataFifo.write(meta);
 			state = 0;
 		}
@@ -1040,6 +1060,8 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						stream<stateQuery>&						rxEng2stateTable_upd_req,
 						stream<rxSarRecvd>&						rxEng2rxSar_upd_req,
 						stream<rxTxSarQuery>&					rxEng2txSar_upd_req,
+						stream<sackRequest>&					rxEng2sack_req,
+						stream<sackReply>&					sack2rxEng_rsp,
 						stream<rxRetransmitTimerUpdate>&		rxEng2timer_clearRetransmitTimer,
 						stream<ap_uint<16> >&					rxEng2timer_clearProbeTimer,
 						stream<ap_uint<16> >&					rxEng2timer_setCloseTimer,
@@ -1086,12 +1108,14 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 
 	static rxFsmMetaData fsm_meta;
 	static bool fsm_txSarRequest = false;
+	static bool fsm_sackRequest = false;
 
 
 	ap_uint<4> control_bits = 0;
 	sessionState tcpState;
 	rxSarEntry rxSar;
 	rxTxSarReply txSar;
+	sackReply sackRsp;
 
 
 	switch(fsm_state)
@@ -1110,16 +1134,23 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				rxEng2txSar_upd_req.write(rxTxSarQuery(fsm_meta.sessionID));
 				fsm_txSarRequest  = true;
 			}
+			if (fsm_meta.meta.ack && !fsm_meta.meta.syn && !fsm_meta.meta.fin && !fsm_meta.meta.rst)
+			{
+				rxEng2sack_req.write(sackRequest(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.sackCount, fsm_meta.meta.sack));
+				fsm_sackRequest = true;
+			}
 			fsm_state = TRANSITION;
 		}
 		break;
 	case TRANSITION:
 		// Check if transition to LOAD occurs
 		if (!stateTable2rxEng_upd_rsp.empty() && !rxSar2rxEng_upd_rsp.empty()
-						&& !(fsm_txSarRequest && txSar2rxEng_upd_rsp.empty()))
+						&& !(fsm_txSarRequest && txSar2rxEng_upd_rsp.empty())
+						&& !(fsm_sackRequest && sack2rxEng_rsp.empty()))
 		{
 			fsm_state = LOAD;
 			fsm_txSarRequest = false;
+			fsm_sackRequest = false;
 		}
 
 		control_bits[0] = fsm_meta.meta.ack;
@@ -1135,11 +1166,15 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				stateTable2rxEng_upd_rsp.read(tcpState);
 				rxSar2rxEng_upd_rsp.read(rxSar);
 				txSar2rxEng_upd_rsp.read(txSar);
+				sack2rxEng_rsp.read(sackRsp);
 				ap_uint<32> ackNumb = fsm_meta.meta.ackNumb;
 				ackTest t = testAck(ackNumb, txSar);
 				bool sameAck = (ackNumb == txSar.prevAck);
 				bool outstanding = (txSar.prevAck != txSar.nextByte);
 				bool duplicate = sameAck && outstanding && fsm_meta.meta.length == 0 && fsm_meta.meta.winSize == txSar.recv_window;
+				bool newSack = rxSar.sack_ok && sackRsp.newData && t.inWindow && ackNumb != txSar.nextByte;
+				bool sackLost = rxSar.sack_ok && t.inWindow && (sackRsp.sacked > 2*MSS || sackRsp.distinct >= 3);
+				bool dupAck = duplicate || newSack;
 				bool inFast = txSar.fastRetransmitted;
 				bool inLoss = txSar.loss;
 				bool inRecovery = inFast || inLoss;
@@ -1147,9 +1182,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				ap_uint<WINDOW_BITS> flightBefore = txSar.nextByte - txSar.prevAck;
 				ap_uint<WINDOW_BITS> flightAfter = txSar.nextByte - ackNumb;
 				ap_uint<2> newCount = (txSar.count == 3) ? ap_uint<2>(3) : ap_uint<2>(txSar.count + 1);
-				bool enterFast = duplicate && !inRecovery && newCount == 3 && t.aboveRecover;
+				bool enterFast = dupAck && !inRecovery && (newCount == 3 || sackLost) && t.aboveRecover;
+				bool enterFastAdvancing = newSack && t.advancing && !inRecovery && sackLost && ackNumb != txSar.nextByte;
 				bool partialAck = t.advancing && inRecovery && t.belowRecover;
-				ap_uint<WINDOW_BITS> halfFlight = flightBefore >> 1;
+				ap_uint<WINDOW_BITS> entryFlight = t.advancing ? flightAfter : flightBefore;
+				ap_uint<WINDOW_BITS> halfFlight = entryFlight >> 1;
 				ap_uint<WINDOW_BITS> newThreshold = (halfFlight > 2*MSS) ? halfFlight : ap_uint<WINDOW_BITS>(2*MSS);
 				ap_uint<WINDOW_BITS> grownWindow = txSar.cong_window;
 				if (txSar.cong_window <= (txSar.slowstart_threshold-MSS))
@@ -1174,7 +1211,42 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				bool timerWrite = false;
 				if (tcpState == ESTABLISHED || tcpState == SYN_RECEIVED || tcpState == FIN_WAIT_1 || tcpState == CLOSING || tcpState == LAST_ACK)
 				{
-					if (duplicate)
+					if (t.advancing)
+					{
+						sarWrite = true;
+						timerWrite = true;
+						rxEng2timer_clearProbeTimer.write(fsm_meta.sessionID);
+						txSar.count = newSack ? newCount : ap_uint<2>(0);
+						if (partialAck)
+						{
+							sendRetransmit = true;
+							txSar.cong_window = inFast ? deflatedWindow : grownWindow;
+						}
+						else if (enterFastAdvancing)
+						{
+							txSar.slowstart_threshold = newThreshold;
+							txSar.cong_window = newThreshold + 3*MSS;
+							txSar.recover = txSar.nextByte;
+							txSar.fastRetransmitted = true;
+							recoveryWrite = true;
+							sendRetransmit = true;
+						}
+						else
+						{
+							txSar.cong_window = inFast ? exitWindow : grownWindow;
+							if (inRecovery)
+							{
+								txSar.fastRetransmitted = false;
+								txSar.loss = false;
+								recoveryWrite = true;
+							}
+							else
+							{
+								txSar.recover = txSar.prevAck;
+							}
+						}
+					}
+					else if (dupAck)
 					{
 						sarWrite = true;
 						if (inFast)
@@ -1192,32 +1264,6 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 								txSar.fastRetransmitted = true;
 								recoveryWrite = true;
 								sendRetransmit = true;
-							}
-						}
-					}
-					else if (t.advancing)
-					{
-						sarWrite = true;
-						timerWrite = true;
-						rxEng2timer_clearProbeTimer.write(fsm_meta.sessionID);
-						txSar.count = 0;
-						if (partialAck)
-						{
-							sendRetransmit = true;
-							txSar.cong_window = inFast ? deflatedWindow : grownWindow;
-						}
-						else
-						{
-							txSar.cong_window = inFast ? exitWindow : grownWindow;
-							if (inRecovery)
-							{
-								txSar.fastRetransmitted = false;
-								txSar.loss = false;
-								recoveryWrite = true;
-							}
-							else
-							{
-								txSar.recover = txSar.prevAck;
 							}
 						}
 					}
@@ -1511,7 +1557,8 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					ap_uint<4> rx_win_shift = (fsm_meta.meta.winScale == 0) ? 0 : WINDOW_SCALE_BITS;
 					ap_uint<4> tx_win_shift = fsm_meta.meta.winScale;
 					// Initialize rxSar, SEQ + phantom byte for recvd and head pointer, offset to 0, gap set to false
-					rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, fsm_meta.meta.seqNumb+1, fsm_meta.meta.seqNumb+1, 0, false, rx_win_shift));
+					rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, fsm_meta.meta.seqNumb+1, fsm_meta.meta.seqNumb+1, 0, false, rx_win_shift, fsm_meta.meta.sackOk == 1));
+					rxEng2sack_req.write(sackRequest(fsm_meta.sessionID));
 					// Initialize receive window
 					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, 0, fsm_meta.meta.winSize, txSar.cong_window, 0, false, tx_win_shift))); //TODO maybe include count check
 #else
@@ -1573,7 +1620,8 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 #if (WINDOW_SCALE)
 					ap_uint<4> rx_win_shift = (fsm_meta.meta.winScale == 0) ? 0 : WINDOW_SCALE_BITS;
 					ap_uint<4> tx_win_shift = fsm_meta.meta.winScale;
-					rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, fsm_meta.meta.seqNumb+1, fsm_meta.meta.seqNumb+1, 0, false, rx_win_shift));
+					rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, fsm_meta.meta.seqNumb+1, fsm_meta.meta.seqNumb+1, 0, false, rx_win_shift, fsm_meta.meta.sackOk == 1));
+					rxEng2sack_req.write(sackRequest(fsm_meta.sessionID));
 					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, 0, false, tx_win_shift))); //TODO maybe include count check
 #else
 					//initialize rx_sar, SEQ + phantom byte, last '1' for appd init
@@ -2106,6 +2154,8 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<ap_uint<16> >&				rxEng2portTable_req,
 				stream<rxSarRecvd>&					rxEng2rxSar_upd_req,
 				stream<rxTxSarQuery>&				rxEng2txSar_upd_req,
+				stream<sackRequest>&				rxEng2sack_req,
+				stream<sackReply>&				sack2rxEng_rsp,
 				stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitTimer,
 				stream<ap_uint<16> >&				rxEng2timer_clearProbeTimer,
 				stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,
@@ -2227,11 +2277,12 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	static hls::stream<rxEngineMetaData>		rxEng_headerMetaFifo("rxEng_headerMetaFifo");
 	static hls::stream<ap_uint<4> >		rxEng_dataOffsetFifo("rxEng_dataOffsetFifo");
 	static hls::stream<ap_uint<320> >		rxEng_optionalFieldsFifo("rxEng_optionalFieldsFifo");
-	static hls::stream<ap_uint<4> >		rxEng_winScaleFifo("rxEng_winScaleFifo");
+	static hls::stream<rxTcpOptions>		rxEng_optionsFifo("rxEng_optionsFifo");
 	#pragma HLS stream variable=rxEng_headerMetaFifo depth=16
 	#pragma HLS stream variable=rxEng_dataOffsetFifo depth=2
 	#pragma HLS stream variable=rxEng_optionalFieldsFifo depth=2
-	#pragma HLS stream variable=rxEng_winScaleFifo depth=2
+	#pragma HLS stream variable=rxEng_optionsFifo depth=2
+	#pragma HLS aggregate  variable=rxEng_optionsFifo compact=bit
 	//TODO data pack
 #endif
 
@@ -2265,8 +2316,8 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	//rxTcpInvalidDropper<WIDTH>(rxEng_dataBuffer3b, rxEng_tcpValidFifo, rxEng_dataBuffer3);
 
 #if (WINDOW_SCALE)
-	parse_optional_header_fields(rxEng_dataOffsetFifo, rxEng_optionalFieldsFifo, rxEng_winScaleFifo);
-	merge_header_meta(rxEng_winScaleFifo, rxEng_headerMetaFifo, rxEng_metaDataFifo);
+	parse_optional_header_fields(rxEng_dataOffsetFifo, rxEng_optionalFieldsFifo, rxEng_optionsFifo);
+	merge_header_meta(rxEng_optionsFifo, rxEng_headerMetaFifo, rxEng_metaDataFifo);
 #endif
 
 	rxMetadataHandler(	rxEng_metaDataFifo,
@@ -2289,6 +2340,8 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 							rxEng2stateTable_upd_req,
 							rxEng2rxSar_upd_req,
 							rxEng2txSar_upd_req,
+							rxEng2sack_req,
+							sack2rxEng_rsp,
 							rxEng2timer_clearRetransmitTimer,
 							rxEng2timer_clearProbeTimer,
 							rxEng2timer_setCloseTimer,
@@ -2338,6 +2391,8 @@ template void rx_engine<DATA_WIDTH>(	stream<net_axis<DATA_WIDTH> >&					ipRxData
 				stream<ap_uint<16> >&				rxEng2portTable_req,
 				stream<rxSarRecvd>&					rxEng2rxSar_upd_req,
 				stream<rxTxSarQuery>&				rxEng2txSar_upd_req,
+				stream<sackRequest>&				rxEng2sack_req,
+				stream<sackReply>&				sack2rxEng_rsp,
 				stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitTimer,
 				stream<ap_uint<16> >&				rxEng2timer_clearProbeTimer,
 				stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,

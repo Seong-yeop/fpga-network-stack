@@ -72,6 +72,16 @@ C-sim PASS를 요구하고, RTL/TB fingerprint가 같을 때만 elaboration을 �
 | `retransmit_tail` | dup ACK 없는 tail loss: 진전 ACK가 RTO를 재시작하고 16 sweep 뒤 RTO가 tail 1세그먼트를 재전송 (C-sim 전용) |
 | `retransmit_lost` | fast RT 사본 재유실: dup ACK는 RTO를 재시작하지 않고 마지막 진전 ACK 기준 16 sweep 뒤 RTO가 반복 (C-sim 전용) |
 | `rto_one_segment` | RTO 1세그먼트, LW가 앱 윈도에 반영, 2배 RTO, loss 상태의 진전 ACK마다 1세그먼트, backoff 유지와 collapse (C-sim 전용) |
+| `sack_scoreboard` | sack_scoreboard 컴포넌트: 블록 병합·인접 결합·ACK 정리·가득 찼을 때 최저 블록 교체·ack 아래/역전/링 밖 블록 거부·clear·wrap·newData |
+| `sack_negotiate` | SYN의 SACK-permitted 유무와 WS 유무별 SYN-ACK 옵션 배치·dataOffset, 능동 open SYN의 SACK-permitted |
+| `sack_gro` | 세그먼트 3개를 덮는 SACK 블록 하나를 실은 ACK 하나로 una의 1세그먼트 fast RT(RFC 6675 IsLost), 반복 블록은 무시 |
+| `sack_threshold` | SACK된 1 MSS와 정확히 2 MSS는 트리거하지 않고 2 MSS+1 B는 트리거(strict-greater) |
+| `sack_blocks` | 불연속 블록 3개로 트리거, 이후 partial ACK마다 다음 hole 재전송(NewReno 순서) |
+| `sack_dsack` | ack 아래 D-SACK 블록을 실은 데이터 세그먼트 3개는 dup으로 세지 않음, 둘째에 포함된 첫 블록은 한 번만 새 정보 |
+| `sack_old_ack` | una보다 오래된 ack에 실린 SACK 블록은 무시, 현재 ack에 실리면 트리거 |
+| `sack_with_data` | payload를 실은 ACK의 새 SACK 블록이 dup ACK로 세어져 fast RT(RFC 6675 §2) |
+| `sack_not_negotiated` | 협상 없이 온 SACK 블록은 무시되고 dup ACK 3개 규칙만 적용 |
+| `sack_rto_clear` | 1 MSS 블록만 있을 때 RTO, loss 상태에서 SACK 정보는 fast RT를 열지 않고 진전 ACK마다 1세그먼트 (C-sim 전용) |
 
 `tx_sequence_wrap`의 SV TB는 top 내부 값을 force하지 않는다. 기존 HLS 생성물의
 `toe_tx_sar_table` 컴포넌트를 기존 FIFO 요청 인터페이스로 직접 구동한다.

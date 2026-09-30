@@ -12,6 +12,7 @@ int unsigned peer_seq[8],server_seq[8],tx_count[8],rx_count[8],tx_requested[8];
 int unsigned advertised[8],acked_peer[8];
 bit connected[8], tx_pending[8];
 bit retransmit_armed=0,hold_acks=0,saw_retransmit=0;int unsigned retransmit_seq=0;
+bit peer_sack_ok=0;int unsigned pending_sack[$];
 int tx_retries=0;int retry_len[8], retry_at[8];int unsigned tx_goal=0;
 int app_sessions[$], app_lengths[$], expected_read_lengths[$];
 int unsigned rx_model_session=0;
@@ -43,11 +44,12 @@ task automatic put_be(ref bytes_t b,input int at,input int unsigned v,input int 
  for(int i=0;i<n;i++)b[at+i]=v>>(8*(n-1-i));
 endtask
 task automatic send_packet(input int sid,input int unsigned seq,input int unsigned ack,input int flags,input int len=0,input bit opts=0,input int ws=3,input bit corrupt=0,input int data_offset=0,input int bad_option=-1);
- bytes_t b,p; s_axis_tcp_data_word a;int h=opts?(ws<0?44:48):40;
+ bytes_t b,p; s_axis_tcp_data_word a;int nsack=pending_sack.size()/2;int h=(opts?(ws<0?44:48)+(peer_sack_ok?4:0):40)+(opts?0:(nsack?4+8*nsack:0));
  for(int i=0;i<h+len;i++)b.push_back(0);
  b[0]='h45;b[8]=64;b[9]=6;put_be(b,2,b.size());put_be(b,12,'h0a000002,4);put_be(b,16,'h0a000001,4);
  put_be(b,20,40000+sid);put_be(b,22,my_port[sid]);put_be(b,24,seq,4);put_be(b,28,ack,4);b[32]=(h-20)/4<<4;if(data_offset!=0)b[32]=data_offset<<4;b[33]=flags;put_be(b,34,peer_window);
- if(opts)begin b[40]=2;b[41]=4;put_be(b,42,8960);if(ws>=0)begin b[44]=3;b[45]=3;b[46]=ws;end end
+ if(opts)begin b[40]=2;b[41]=4;put_be(b,42,8960);if(ws>=0)begin b[44]=3;b[45]=3;b[46]=ws;end if(peer_sack_ok)begin int q=ws<0?44:47;b[q]=4;b[q+1]=2;b[q+2]=1;b[q+3]=1;if(ws>=0)b[q+4]=1;end end
+ if(!opts&&nsack)begin b[40]=1;b[41]=1;b[42]=5;b[43]=2+8*nsack;for(int i=0;i<nsack;i++)begin put_be(b,44+8*i,pending_sack[2*i],4);put_be(b,48+8*i,pending_sack[2*i+1],4);end pending_sack.delete();end
  if(bad_option>=0)begin b[40]=30;b[41]=bad_option;end
  for(int i=0;i<len;i++)b[h+i]=((seq-peer_isn[sid]-1+i)*17+5+sid);
  for(int i=12;i<20;i++)p.push_back(b[i]);p.push_back(0);p.push_back(6);p.push_back((b.size()-20)>>8);p.push_back(b.size()-20);
@@ -68,7 +70,7 @@ task automatic consume_packet;
  seq=get_be(packet_out,24,4);h=20+(packet_out[32]>>4)*4;len=packet_out.size()-h;
  update.due=cycle+2500;update.sid=sid;update.ack=get_be(packet_out,28,4);update.window=get_be(packet_out,34)<<3;delayed_windows.push_back(update);
  if(packet_out[33]&2)begin
-  if(packet_out.size()!=(expect_ws?48:44)||packet_out[40]!=2||get_be(packet_out,42)!=8960||(expect_ws && (packet_out[44]!=3||packet_out[46]!=3)))$fatal(1,"SYN MSS/WS");
+  if(packet_out.size()!=(expect_ws?48:44)+(((packet_out[33]&16)?peer_sack_ok:1'b1)?4:0)||packet_out[40]!=2||get_be(packet_out,42)!=8960||(expect_ws && (packet_out[44]!=3||packet_out[46]!=3)))$fatal(1,"SYN MSS/WS");
   server_seq[sid]=seq+1;my_port[sid]=get_be(packet_out,20);
   if(active_open && !(packet_out[33]&16))send_packet(sid,peer_isn[sid],seq+1,18,0,1);
   else begin connected[sid]=1;if(auto_handshake)send_packet(sid,peer_seq[sid],seq+1,16);end

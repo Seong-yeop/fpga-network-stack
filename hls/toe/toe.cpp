@@ -33,6 +33,7 @@
 #include "rx_sar_table/rx_sar_table.hpp"
 #include "tx_sar_table/tx_sar_table.hpp"
 #include "retransmit_timer/retransmit_timer.hpp"
+#include "sack_scoreboard/sack_scoreboard.hpp"
 #include "probe_timer/probe_timer.hpp"
 #include "close_timer/close_timer.hpp"
 #include "event_engine/event_engine.hpp"
@@ -616,6 +617,14 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS aggregate variable=txSar2txApp_ack_push compact=bit
 	#pragma HLS aggregate variable=txApp2txSar_push compact=bit
 
+	static stream<sackRequest>				rxEng2sack_req("rxEng2sack_req");
+	static stream<ap_uint<16> >				txEng2sack_clear("txEng2sack_clear");
+	static stream<sackReply>				sack2rxEng_rsp("sack2rxEng_rsp");
+	#pragma HLS stream variable=rxEng2sack_req depth=2
+	#pragma HLS stream variable=txEng2sack_clear depth=2
+	#pragma HLS stream variable=sack2rxEng_rsp depth=2
+	#pragma HLS aggregate variable=rxEng2sack_req compact=bit
+	#pragma HLS aggregate variable=sack2rxEng_rsp compact=bit
 	// Retransmit Timer
 	static stream<rxRetransmitTimerUpdate>		rxEng2timer_clearRetransmitTimer("rxEng2timer_clearRetransmitTimer");
 	static stream<txRetransmitTimerSet>			txEng2timer_setRetransmitTimer("txEng2timer_setRetransmitTimer");
@@ -732,6 +741,8 @@ V80_RX_DEBUG_ARGS
 				);
 
 	// TX Sar Table
+	sack_scoreboard(rxEng2sack_req, txEng2sack_clear, sack2rxEng_rsp);
+
 	tx_sar_table(	rxEng2txSar_upd_req,
 					//txApp2txSar_upd_req,
 					txEng2txSar_upd_req,
@@ -788,6 +799,8 @@ V80_RX_DEBUG_ARGS
 				rxEng2portTable_check_req,
 				rxEng2rxSar_upd_req,
 				rxEng2txSar_upd_req,
+				rxEng2sack_req,
+				sack2rxEng_rsp,
 				rxEng2timer_clearRetransmitTimer,
 				rxEng2timer_clearProbeTimer,
 				rxEng2timer_setCloseTimer,
@@ -816,6 +829,7 @@ V80_RX_DEBUG_ARGS
 				txEng2txSar_upd_req,
 				txEng2timer_setRetransmitTimer,
 				txEng2timer_setProbeTimer,
+				txEng2sack_clear,
 				txBufferReadCmd,
 				txEng2sLookup_rev_req,
 				ipTxData,
