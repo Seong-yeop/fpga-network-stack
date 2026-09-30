@@ -552,6 +552,7 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 
 			optionalHeader.parseWord(currWord.data);
 			parseHeader = false;
+			headerWritten = false;
 			if (dataOffset == 0)
 			{
 				dataOut.write(currWord);
@@ -564,13 +565,13 @@ void drop_optional_header_fields(	hls::stream<optionalFieldsMeta>&		metaIn,
 				if (optionalHeader.isReady() || currWord.last)
 				{
 					optionalHeaderFieldsOut.write(optionalHeader.getRawHeader());
+					headerWritten = true;
 				}
 #endif
 			}
 
 			state = 1;
 			prevWord = currWord;
-			headerWritten = false;
 			if (currWord.last)
 			{
 				state = 0;

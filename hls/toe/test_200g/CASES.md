@@ -82,6 +82,8 @@ C-sim PASS를 요구하고, RTL/TB fingerprint가 같을 때만 elaboration을 �
 | `sack_with_data` | payload를 실은 ACK의 새 SACK 블록이 dup ACK로 세어져 fast RT(RFC 6675 §2) |
 | `sack_not_negotiated` | 협상 없이 온 SACK 블록은 무시되고 dup ACK 3개 규칙만 적용 |
 | `sack_rto_clear` | 1 MSS 블록만 있을 때 RTO, loss 상태에서 SACK 정보는 fast RT를 열지 않고 진전 ACK마다 1세그먼트 (C-sim 전용) |
+| `sack_multiword` | SACK 블록을 실은 300 B 데이터 세그먼트(2워드 이상) 뒤의 순수 SACK ACK가 자기 블록으로 손실을 판정하고, 이런 세그먼트 3개가 이어져도 RX 데이터가 그대로 전달됨 (옵션 필드 FIFO 중복 쓰기 회귀, C-sim 전용) |
+| `reconnect_after_loss` | RTO로 loss 상태가 된 연결을 부분 ACK+FIN과 앱 close로 닫은 뒤 다른 피어 포트의 새 연결에서 RX 700 B/TX 300 B를 30번 주고받음: 바이트 일치, 새 연결의 재전송 0, 추가 close 통지 0 (C-sim 전용) |
 
 `tx_sequence_wrap`의 SV TB는 top 내부 값을 force하지 않는다. 기존 HLS 생성물의
 `toe_tx_sar_table` 컴포넌트를 기존 FIFO 요청 인터페이스로 직접 구동한다.

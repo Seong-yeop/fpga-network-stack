@@ -20,9 +20,10 @@ static unsigned checksum(const Bytes &b) {
 }
 static void put(Bytes &b,unsigned at,unsigned v,unsigned n=2) { for(unsigned i=0;i<n;i++) b[at+i]=v>>(8*(n-1-i)); }
 static unsigned get(const Bytes &b,unsigned at,unsigned n=2) { unsigned v=0; for(unsigned i=0;i<n;i++) v=(v<<8)|b.at(at+i); return v; }
+static unsigned peerPort=40000;
 static Bytes packet(unsigned seq,unsigned ack,unsigned flags,const Bytes &payload={}, bool options=false,unsigned dstPort=5001) {
     Bytes b(40+(options?8:0)+payload.size(),0); b[0]=0x45; put(b,2,b.size()); b[8]=64; b[9]=6;
-    put(b,12,0x0a000002,4); put(b,16,0x0a000001,4); put(b,20,40000); put(b,22,dstPort);
+    put(b,12,0x0a000002,4); put(b,16,0x0a000001,4); put(b,20,peerPort); put(b,22,dstPort);
     put(b,24,seq,4); put(b,28,ack,4); b[32]=(options?7:5)<<4; b[33]=flags; put(b,34,65535);
     if(options) {b[40]=2;b[41]=4;put(b,42,8960);b[44]=3;b[45]=3;b[46]=3;}
     std::copy(payload.begin(),payload.end(),b.end()-payload.size());
@@ -45,7 +46,7 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, sackOk=false, autoAck=true, allowNoSpace=false;unsigned delay=1, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, sackOk=false, autoAck=true, allowNoSpace=false;unsigned delay=1, closeNotices=0, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
 #if !(RX_DDR_BYPASS)
@@ -80,7 +81,7 @@ struct Bench {
   if(!rxRC.empty())rxReads.push_back(rxRC.read());
   if(cycles>=readPauseUntil&&!rxReads.empty()&&rxRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=rxReads.front();unsigned base=c.saddr.to_uint();for(unsigned j=0;j<DATA_WIDTH/8&&rro<c.bbt;j++,rro++){a.data(j*8+7,j*8)=rxmem.at(ring(base,rro));a.keep[j]=1;}a.strb=a.keep;a.last=rro==c.bbt;rxRead.write(a);if(a.last){rxReads.pop_front();rro=0;}}
 #endif
-  if(cycles%delay==0 && !notices.empty()){auto n=notices.read();sid=n.sessionID;if(n.length){read.write(appReadRequest(n.sessionID,n.length));pendingLengths.push_back(n.length);}}
+  if(cycles%delay==0 && !notices.empty()){auto n=notices.read();sid=n.sessionID;if(n.closed)closeNotices++;if(n.length){read.write(appReadRequest(n.sessionID,n.length));pendingLengths.push_back(n.length);}}
   if(!rxMeta.empty()){rxMeta.read();check(!pendingLengths.empty(),"unexpected RX metadata");lengths.push_back(pendingLengths.front());pendingLengths.pop_front();}
   if(cycles%delay==0 && !appRx.empty()){auto a=appRx.read();check(!lengths.empty(),"missing RX metadata");unsigned before=received.size();append(received,a);unsigned bytes=received.size()-before;check(bytes<=lengths.front(),"RX request length exceeded");lengths.front()-=bytes;if(a.last){check(lengths.front()==0,"early RX TLAST");lengths.pop_front();}else check(lengths.front()!=0,"missing RX TLAST");}
   if(!txWC.empty())writes.push_back(txWC.read());
