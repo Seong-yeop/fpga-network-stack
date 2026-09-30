@@ -23,22 +23,21 @@ task automatic case_step;
    case_start=cycle;case_phase=4;
   end
   4:if(cycle-case_start>10000)begin
-   int unsigned bytes_read;
-   bytes_read=0;
-   foreach(rt_reads[i])begin
-    if(rt_reads[i][63:32]!=((server_seq[0]+WARM+8960+bytes_read)&32'h3FFFF))$fatal(1,"original retransmission read address");
-    if(rt_reads[i][22:0]==0||rt_reads[i][22:0]>8960)$fatal(1,"original retransmission read length");
-    bytes_read+=rt_reads[i][22:0];
-   end
-   if(bytes_read!=4*8960)$fatal(1,"original retransmission read %0d bytes, expected four MSS",bytes_read);
-   case_packets=rt_reads.size();auto_ack=1;
-   send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);
+   if(rt_reads.size()!=1)$fatal(1,"fast retransmission read %0d segments, expected one",rt_reads.size());
+   if(rt_reads[0][63:32]!=((server_seq[0]+WARM+8960)&32'h3FFFF))$fatal(1,"retransmission read address");
+   if(rt_reads[0][22:0]!=8960)$fatal(1,"retransmission read length %0d, expected one MSS",rt_reads[0][22:0]);
+   for(int i=0;i<3;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+8960,16);
    case_start=cycle;case_phase=5;
   end
-  5:if(cycle-case_start>3000)begin
-   if(rt_reads.size()!=case_packets)$fatal(1,"buffer read after the cumulative ACK");
-   capture=0;if(!tx_pending[0])begin request_tx(0,64);case_phase=6;end
+  5:if(cycle-case_start>5000)begin
+   if(rt_reads.size()!=1)$fatal(1,"further duplicate ACKs resent (%0d reads)",rt_reads.size());
+   auto_ack=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);
+   case_start=cycle;case_phase=6;
   end
-  6:if(tx_count[0]==WARM+6*8960+64)case_done=1;
+  6:if(cycle-case_start>3000)begin
+   if(rt_reads.size()!=1)$fatal(1,"buffer read after the cumulative ACK");
+   capture=0;if(!tx_pending[0])begin request_tx(0,64);case_phase=7;end
+  end
+  7:if(tx_count[0]==WARM+6*8960+64)case_done=1;
  endcase
 endtask

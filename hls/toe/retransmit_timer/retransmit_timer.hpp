@@ -38,25 +38,31 @@ struct retransmitTimerEntry
 {
 	ap_uint<32>		time;
 	ap_uint<3>		retries;
+	ap_uint<3>		backoff;
 	bool			active;
 	eventType		type;
 };
 
-/** @ingroup retransmit_timer
- *
- */
-struct mergedInput
+static const unsigned RT_FORWARD_DEPTH = 6;
+static const ap_uint<3> RT_MAX_RETRIES = 6;
+static const ap_uint<3> RT_MAX_BACKOFF = 6;
+
+#define RT_INTERVAL(k) ((ap_uint<38>(TIME_RTO_BASE) << (k)) > ap_uint<38>(TIME_RTO_MAX) ? TIME_RTO_MAX : ap_uint<32>(ap_uint<38>(TIME_RTO_BASE) << (k)))
+
+static ap_uint<32> rtoInterval(ap_uint<3> backoff)
 {
-	ap_uint<16>		sessionID;
-	eventType		type;
-	bool			stop;
-	bool			isSet;
-	mergedInput() {}
-	mergedInput(ap_uint<16> id, eventType t)
-			:sessionID(id), type(t), stop(false), isSet(true) {}
-	mergedInput(ap_uint<16> id, bool stop)
-			:sessionID(id), type(RT), stop(stop), isSet(false) {}
-};
+#pragma HLS INLINE
+	switch (backoff)
+	{
+	case 0: return RT_INTERVAL(0);
+	case 1: return RT_INTERVAL(1);
+	case 2: return RT_INTERVAL(2);
+	case 3: return RT_INTERVAL(3);
+	case 4: return RT_INTERVAL(4);
+	case 5: return RT_INTERVAL(5);
+	default: return RT_INTERVAL(6);
+	}
+}
 
 /** @defgroup retransmit_timer Retransmit Timer
  *

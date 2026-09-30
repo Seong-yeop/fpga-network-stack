@@ -12,20 +12,20 @@ task automatic case_step;
  if(connected[0] && cycle>45000)case(case_phase)
   0:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<6)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM)begin case_start=cycle;case_phase=1;end end
   1:if(cycle-case_start>4000)begin auto_ack=0;case_phase=2;end
-  2:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<13)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+7*8960)begin case_start=cycle;case_phase=3;end end
+  2:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<12)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+6*8960)begin case_start=cycle;case_phase=3;end end
   3:if(cycle-case_start>200)begin capture=1;send_packet(0,peer_seq[0],server_seq[0]+WARM,16);for(int i=0;i<3;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM,16);case_start=cycle;case_phase=4;end
-  4:if(rt_reads.size()>=1)begin expect_read(0,server_seq[0]+WARM,"first fast retransmission");send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);case_start=cycle;case_phase=5;end
+  4:if(rt_reads.size()>=1)begin expect_read(0,server_seq[0]+WARM,"first fast retransmission");send_packet(0,peer_seq[0],server_seq[0]+WARM+5*8960,16);case_start=cycle;case_phase=5;end
    else if(cycle-case_start>20000)$fatal(1,"no fast retransmission after three duplicate ACKs");
-  5:if(rt_reads.size()>=2)begin expect_read(1,server_seq[0]+WARM+6*8960,"partial ACK retransmission");send_packet(0,peer_seq[0],server_seq[0]+WARM+7*8960,16);case_start=cycle;case_phase=6;end
+  5:if(rt_reads.size()>=2)begin expect_read(1,server_seq[0]+WARM+5*8960,"partial ACK retransmission");send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);case_start=cycle;case_phase=6;end
    else if(cycle-case_start>20000)$fatal(1,"partial ACK did not resend the last hole");
   6:if(cycle-case_start>3000)begin if(rt_reads.size()!=2)$fatal(1,"read after the recovery exit");issued=0;case_phase=7;end
-  7:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<2)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+9*8960)begin case_start=cycle;case_phase=8;end end
-  8:if(cycle-case_start>200)begin for(int i=0;i<4;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+7*8960,16);case_start=cycle;case_phase=9;end
+  7:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<2)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+8*8960)begin case_start=cycle;case_phase=8;end end
+  8:if(cycle-case_start>200)begin for(int i=0;i<4;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);case_start=cycle;case_phase=9;end
   9:if(cycle-case_start>20000)begin
    if(rt_reads.size()!=2)$fatal(1,"duplicate ACKs at recover started another fast retransmit (%0d reads)",rt_reads.size());
-   send_packet(0,peer_seq[0],server_seq[0]+WARM+8*8960,16);for(int i=0;i<3;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+8*8960,16);case_start=cycle;case_phase=10;
+   send_packet(0,peer_seq[0],server_seq[0]+WARM+7*8960,16);for(int i=0;i<3;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+7*8960,16);case_start=cycle;case_phase=10;
   end
-  10:if(rt_reads.size()>=3)begin expect_read(2,server_seq[0]+WARM+8*8960,"fast retransmission beyond recover");auto_ack=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+9*8960,16);case_start=cycle;case_phase=11;end
+  10:if(rt_reads.size()>=3)begin expect_read(2,server_seq[0]+WARM+7*8960,"fast retransmission beyond recover");auto_ack=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+8*8960,16);case_start=cycle;case_phase=11;end
    else if(cycle-case_start>20000)$fatal(1,"duplicate ACKs beyond recover did not fast-retransmit");
   11:if(cycle-case_start>6000)begin if(rt_reads.size()!=3)$fatal(1,"%0d reads after the final ACK, expected 3",rt_reads.size());case_done=1;end
  endcase

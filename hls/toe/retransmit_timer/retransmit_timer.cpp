@@ -31,21 +31,6 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.// Copyright (c) 2015 Xilinx, 
 
 using namespace hls;
 
-/** @ingroup retransmit_timer
- *  The @ref tx_engine sends the Session-ID and Eventy type through the @param txRetransmitTimerFifoIn.
- *  If the timer is unactivated for this session it is activated, the time-out interval is set depending on
- *  how often the session already time-outed.
- *  The @ref rx_engine indicates when a timer for a specific session has to be stopped.
- *	If a timer times-out the corresponding EVent is fired back to the @ref tx_engine. If a session times-out more than 4 times
- *	in a row, it is aborted. The session is released through @param retransmitTimerReleaseFifoOut and the application is
- *	notified through @param timerNotificationFifoOut.
- *	Currently the II is 2 which means that the interval take twice as much time as defined.
- *  @param[in]		rxEng2timer_clearRetransmitTimer
- *  @param[in]		txEng2timer_setRetransmitTimer
- *  @param[out]		rtTimer2eventEng_setEvent
- *  @param[out]		rtTimer2stateTable_releaseState
- *  @param[out]		rtTimer2rxApp_notification
- */
 void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitTimer,
 						stream<txRetransmitTimerSet>&		txEng2timer_setRetransmitTimer,
 						stream<event>&						rtTimer2eventEng_setEvent,
@@ -54,7 +39,6 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 						stream<openStatus>&					rtTimer2txApp_notification)
 {
 #pragma HLS PIPELINE II=1
-//#pragma HLS INLINE
 
 #pragma HLS aggregate  variable=rxEng2timer_clearRetransmitTimer compact=bit
 #pragma HLS aggregate  variable=txEng2timer_setRetransmitTimer compact=bit
@@ -67,126 +51,119 @@ void retransmit_timer(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetrans
 	#pragma HLS aggregate  variable=retransmitTimerTable compact=bit
 	#pragma HLS DEPENDENCE variable=retransmitTimerTable inter false
 
-	static ap_uint<16>			rt_position = 0;
-	static bool							rt_waitForWrite = false;
-	static ap_uint<16>					rt_prevPosition = 0;
-	static rxRetransmitTimerUpdate	rt_update;
+	static ap_uint<16> rt_position = 0;
+	static bool rt_fwValid[RT_FORWARD_DEPTH] = {};
+	static ap_uint<16> rt_fwId[RT_FORWARD_DEPTH];
+	static retransmitTimerEntry rt_fwEntry[RT_FORWARD_DEPTH];
+	#pragma HLS ARRAY_PARTITION variable=rt_fwValid complete
+	#pragma HLS ARRAY_PARTITION variable=rt_fwId complete
+	#pragma HLS ARRAY_PARTITION variable=rt_fwEntry complete
 
-	retransmitTimerEntry	currEntry;
-	ap_uint<1> operationSwitch = 0;
-	txRetransmitTimerSet	set;
-	ap_uint<16>				currID;
-
-	if (rt_waitForWrite && rt_update.sessionID != rt_prevPosition) //TODO maybe prevprev too
+	rxRetransmitTimerUpdate update;
+	txRetransmitTimerSet set;
+	ap_uint<2> operationSwitch = 0;
+	ap_uint<16> currID = rt_position;
+	if (!rxEng2timer_clearRetransmitTimer.empty())
 	{
-		if (!rt_update.stop)
-		{
-			retransmitTimerTable[rt_update.sessionID].time = TIME_1s;
-		}
-		else
-		{
-			retransmitTimerTable[rt_update.sessionID].time = 0;
-			retransmitTimerTable[rt_update.sessionID].active = false;
-		}
-		retransmitTimerTable[rt_update.sessionID].retries = 0;
-		rt_waitForWrite = false;
+		rxEng2timer_clearRetransmitTimer.read(update);
+		currID = update.sessionID;
+		operationSwitch = 2;
 	}
-	else if (!rxEng2timer_clearRetransmitTimer.empty() && !rt_waitForWrite) //FIXME rx path has priority over tx path
+	else if (!txEng2timer_setRetransmitTimer.empty())
 	{
-		rxEng2timer_clearRetransmitTimer.read(rt_update);
-		rt_waitForWrite = true;
+		txEng2timer_setRetransmitTimer.read(set);
+		currID = set.sessionID;
+		operationSwitch = 1;
 	}
 	else
 	{
-		currID = rt_position;
+		rt_position = (rt_position == MAX_SESSIONS-1) ? ap_uint<16>(0) : ap_uint<16>(rt_position+1);
+	}
 
-		if (!txEng2timer_setRetransmitTimer.empty())
+	retransmitTimerEntry currEntry = retransmitTimerTable[currID];
+	for (int k = RT_FORWARD_DEPTH-1; k >= 0; k--)
+	{
+	#pragma HLS UNROLL
+		if (rt_fwValid[k] && rt_fwId[k] == currID)
 		{
-			txEng2timer_setRetransmitTimer.read(set);
-			currID = set.sessionID;
-			operationSwitch = 1;
-			if (set.sessionID-3 < rt_position && rt_position <= set.sessionID)
-			{
-				rt_position += 5;
-			}
+			currEntry = rt_fwEntry[k];
+		}
+	}
+
+	switch (operationSwitch)
+	{
+	case 2:
+		currEntry.retries = 0;
+		if (update.stop)
+		{
+			currEntry.active = false;
+			currEntry.time = 0;
+			currEntry.backoff = 0;
 		}
 		else
 		{
-			// increment position
-			rt_position++;
-			if (rt_position >= MAX_SESSIONS)
+			if (update.collapse)
 			{
-				rt_position = 0;
-			}
-			operationSwitch = 0;
-		}
-
-		// Get entry from table
-		currEntry = retransmitTimerTable[currID];
-		switch (operationSwitch)
-		{
-		case 1:
-			currEntry.type = set.type;
-			if (!currEntry.active)
-			{
-				switch(currEntry.retries)
-				{
-				case 0:
-					currEntry.time = TIME_1s; //TIME_5s;
-					break;
-				case 1:
-					currEntry.time = TIME_5s; //TIME_7s;
-					break;
-				case 2:
-					currEntry.time = TIME_10s; //TIME_15s;
-					break;
-				case 3:
-					currEntry.time = TIME_15s; //TIME_20s;
-					break;
-				default:
-					currEntry.time = TIME_30s; //TIME_30s;
-					break;
-				}
+				currEntry.backoff = 0;
 			}
 			currEntry.active = true;
-			break;
-		case 0:
-			if (currEntry.active)
+			currEntry.time = rtoInterval(currEntry.backoff);
+		}
+		break;
+	case 1:
+		currEntry.type = set.type;
+		if (!currEntry.active)
+		{
+			currEntry.time = rtoInterval(currEntry.backoff);
+			currEntry.active = true;
+		}
+		break;
+	default:
+		if (currEntry.active)
+		{
+			if (currEntry.time > 0)
 			{
-				if (currEntry.time > 0)
+				currEntry.time--;
+			}
+			else if (!rtTimer2eventEng_setEvent.full())
+			{
+				currEntry.active = false;
+				if (currEntry.retries < RT_MAX_RETRIES)
 				{
-					currEntry.time--;
-				}
-				// We need to check if we can generate another event, otherwise we might end up in a Deadlock,
-				// since the TX Engine will not be able to set new retransmit timers
-				else if (!rtTimer2eventEng_setEvent.full())
-				{
-					currEntry.time = 0;
-					currEntry.active = false;
-					if (currEntry.retries < 4)
+					currEntry.retries++;
+					if (currEntry.backoff < RT_MAX_BACKOFF)
 					{
-						currEntry.retries++;
-						rtTimer2eventEng_setEvent.write(event(currEntry.type, currID, currEntry.retries));
+						currEntry.backoff++;
+					}
+					rtTimer2eventEng_setEvent.write(event(currEntry.type, currID, currEntry.retries));
+				}
+				else
+				{
+					currEntry.retries = 0;
+					currEntry.backoff = 0;
+					rtTimer2stateTable_releaseState.write(currID);
+					if (currEntry.type == SYN)
+					{
+						rtTimer2txApp_notification.write(openStatus(currID, false));
 					}
 					else
 					{
-						currEntry.retries = 0;
-						rtTimer2stateTable_releaseState.write(currID);
-						if (currEntry.type == SYN)
-						{
-							rtTimer2txApp_notification.write(openStatus(currID, false));
-						}
-						else
-						{
-							rtTimer2rxApp_notification.write(appNotification(currID, true)); //TIME_OUT
-						}
+						rtTimer2rxApp_notification.write(appNotification(currID, true));
 					}
 				}
-			} //if active
-			break;
-		} //switch
-		// write entry back
-		retransmitTimerTable[currID] = currEntry;
-		rt_prevPosition = currID;
+			}
+		}
+		break;
 	}
+	retransmitTimerTable[currID] = currEntry;
+	for (int k = RT_FORWARD_DEPTH-1; k > 0; k--)
+	{
+	#pragma HLS UNROLL
+		rt_fwValid[k] = rt_fwValid[k-1];
+		rt_fwId[k] = rt_fwId[k-1];
+		rt_fwEntry[k] = rt_fwEntry[k-1];
+	}
+	rt_fwValid[0] = true;
+	rt_fwId[0] = currID;
+	rt_fwEntry[0] = currEntry;
 }

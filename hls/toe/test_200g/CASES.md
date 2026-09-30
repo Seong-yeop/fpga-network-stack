@@ -61,9 +61,17 @@ C-sim PASS를 요구하고, RTL/TB fingerprint가 같을 때만 elaboration을 �
 | `closed_port` | 닫힌 포트 SYN의 RST 응답, 이후 listen/연결/수신 |
 | `multisession` | 8개 tuple과 실제 session ID의 매칭, 혼합 RX/TX |
 | `backpressure` | active open, RX/TX, fast retransmit의 전체 인터페이스 stall |
-| `timers` | 기존 C-sim 단축 상수로 RTO event 및 cancel 검증. 실제 timeout 시간 인증 아님 |
+| `timers` | retransmit_timer 컴포넌트: C-sim 단축 상수(16/32/60 sweep)로 지수 backoff, 활성 타이머의 set 무시, 진전 ACK 재시작과 collapse, 6회 재전송 뒤 해제, 연속 사이클 set/stop forwarding. 실제 timeout 시간 인증 아님 |
 | `probe_timer` | probe 만료 event, RX에 의한 fast resume, one-shot 동작 |
 | `write_retransmit` | write가 정지된 동안 빠른 재전송을 유도해 write 완료 status 전 read 금지·완료 후 재개 검증 |
+| `retransmit_window` | dup ACK 3개 → una의 1세그먼트 read 하나, 추가 dup ACK 무시, 누적 ACK 뒤 read 없음 |
+| `retransmit_wrap` | 능동 open 세션 1에서 ring 끝에 걸친 세그먼트의 fast RT가 세션 자기 ring 안의 read 2개로 나뉨 |
+| `dupack_window` | 같은 ack의 윈도 갱신은 dup ACK로 세지 않음(RFC 5681 §2), 윈도가 같은 dup ACK 3개만 fast RT |
+| `recover_gate` | NewReno recover: partial ACK마다 1세그먼트, recover에서의 dup ACK는 재진입 금지, recover 너머는 허용, 종료 cwnd로 2세그먼트만 허용 |
+| `retransmit_two_holes` | 구멍 두 개: 3번째 dup ACK가 첫 구멍, partial ACK가 둘째 구멍을 즉시 재전송 |
+| `retransmit_tail` | dup ACK 없는 tail loss: 진전 ACK가 RTO를 재시작하고 16 sweep 뒤 RTO가 tail 1세그먼트를 재전송 (C-sim 전용) |
+| `retransmit_lost` | fast RT 사본 재유실: dup ACK는 RTO를 재시작하지 않고 마지막 진전 ACK 기준 16 sweep 뒤 RTO가 반복 (C-sim 전용) |
+| `rto_one_segment` | RTO 1세그먼트, LW가 앱 윈도에 반영, 2배 RTO, loss 상태의 진전 ACK마다 1세그먼트, backoff 유지와 collapse (C-sim 전용) |
 
 `tx_sequence_wrap`의 SV TB는 top 내부 값을 force하지 않는다. 기존 HLS 생성물의
 `toe_tx_sar_table` 컴포넌트를 기존 FIFO 요청 인터페이스로 직접 구동한다.

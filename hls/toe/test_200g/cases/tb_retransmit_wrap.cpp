@@ -13,33 +13,30 @@ static void test() {
  warm_window(b,6);
  for(;;){
   unsigned toWrap=to_wrap(b);
-  if(toWrap>3*8960){write_data(b,8960,160);continue;}
-  unsigned r=toWrap%8960;
-  if(r>=64&&r<=8896)break;
-  write_data(b,(r<64)?r+64:r-8896,160);
+  if(toWrap>8960){write_data(b,8960,160);continue;}
+  if(toWrap>=64&&toWrap<=8896)break;
+  write_data(b,(toWrap<64)?toWrap+64:toWrap-8896,160);
  }
  b.run(400);check(b.txPayload==b.expectedTx.size(),fmt("pre-wrap TX missing",b).c_str());
- unsigned start=b.expectedTx.size(),cross=to_wrap(b)/8960,base=b.ack+start;check(cross<4,"straddling segment outside the burst");
+ unsigned start=b.expectedTx.size(),base=b.ack+start,firstLen=to_wrap(b);unsigned tA=b.cycles;
+ check(firstLen>=64&&firstLen<8960,"first unacknowledged segment does not straddle the ring end");
  b.autoAck=false;
  for(int i=0;i<6;i++)write_data(b,8960,0);
  unsigned before=b.readLog.size();
  for(unsigned k=2;k<=4;k++){wait_payload(b,start+k*8960,"window TX missing");send(b.ipRx,packet(b.seq,base,16,{},false,b.myPort));}
  unsigned limit=b.cycles+1500,keep=b.cycles;
- while((b.readLog.size()<before+5||b.txPayload<start+6*8960)&&b.cycles<limit){b.tick();if(b.cycles-keep>=60){send(b.ipRx,packet(b.seq,base,16,{},false,b.myPort));keep=b.cycles;}}
+ while((b.readLog.size()<before+2||b.txPayload<start+6*8960)&&b.cycles<limit){b.tick();if(b.cycles-keep>=60){send(b.ipRx,packet(b.seq,base,16,{},false,b.myPort));keep=b.cycles;}}
+ check(b.cycles-tA<sweeps(12),"case ran into the RTO window");
  check(b.txPayload==start+6*8960,fmt("window TX missing",b).c_str());
- check(b.readLog.size()==before+5,fmt("original burst must be four segments with one split read",b).c_str());
- unsigned expect=(base&(BUFFER_SIZE-1))|(b.sid<<WINDOW_BITS),covered=0,splits=0;
- for(unsigned i=before;i<before+5;i++){
-  unsigned a=b.readLog[i].saddr.to_uint(),n=b.readLog[i].bbt.to_uint();
-  check((a>>WINDOW_BITS)==b.sid,"retransmission read left the session ring");
-  check(a==expect,"retransmission reads are not contiguous");
-  check(((a&(BUFFER_SIZE-1))+n)<=BUFFER_SIZE,"retransmission read crosses the ring end");
-  if(((a&(BUFFER_SIZE-1))+n)==BUFFER_SIZE)splits++;
-  covered+=n;expect=(((a+n)&(BUFFER_SIZE-1))|(b.sid<<WINDOW_BITS));
- }
- check(covered==4*8960&&splits==1,fmt("burst did not cover four segments across the ring end",b).c_str());
+ check(b.readLog.size()==before+2,fmt("straddling retransmission must be two reads",b).c_str());
+ unsigned a0=b.readLog[before].saddr.to_uint(),n0=b.readLog[before].bbt.to_uint();
+ unsigned a1=b.readLog[before+1].saddr.to_uint(),n1=b.readLog[before+1].bbt.to_uint();
+ check((a0>>WINDOW_BITS)==b.sid&&(a1>>WINDOW_BITS)==b.sid,"retransmission read left the session ring");
+ check((a0&(BUFFER_SIZE-1))==(base&(BUFFER_SIZE-1)),"first half address");
+ check(n0==firstLen&&((a0&(BUFFER_SIZE-1))+n0)==BUFFER_SIZE,"first half must end at the ring end");
+ check((a1&(BUFFER_SIZE-1))==0&&n1==8960-firstLen,"second half must start the session ring");
  b.autoAck=true;send(b.ipRx,packet(b.seq,base+6*8960,16,{},false,b.myPort));b.run(2500);
- check(b.readLog.size()==before+5,fmt("buffer read after the cumulative ACK",b).c_str());
+ check(b.readLog.size()==before+2,fmt("buffer read after the cumulative ACK",b).c_str());
  check(b.txPayload==start+6*8960,fmt("payload after recovery",b).c_str());
 }
 int main(){return run_case("retransmit_wrap",test);}

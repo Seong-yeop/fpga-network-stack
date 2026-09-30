@@ -1010,6 +1010,29 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 	}//switch
 }
 
+struct ackTest
+{
+	bool inWindow;
+	bool advancing;
+	bool allAcked;
+	bool belowRecover;
+	bool aboveRecover;
+};
+
+static ackTest testAck(ap_uint<32> ackNumb, const rxTxSarReply& txSar)
+{
+#pragma HLS INLINE
+	ackTest t;
+	ap_int<32> ackToRecover = ackNumb - txSar.recover;
+	t.inWindow = (txSar.prevAck <= ackNumb && ackNumb <= txSar.nextByte)
+		|| ((txSar.prevAck <= ackNumb || ackNumb <= txSar.nextByte) && txSar.nextByte < txSar.prevAck);
+	t.advancing = t.inWindow && ackNumb != txSar.prevAck;
+	t.allAcked = (ackNumb == txSar.nextByte);
+	t.belowRecover = ackToRecover < 0;
+	t.aboveRecover = ackToRecover > 0;
+	return t;
+}
+
 void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						stream<sessionState>&					stateTable2rxEng_upd_rsp,
 						stream<rxSarEntry>&						rxSar2rxEng_upd_rsp,
@@ -1112,39 +1135,99 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				stateTable2rxEng_upd_rsp.read(tcpState);
 				rxSar2rxEng_upd_rsp.read(rxSar);
 				txSar2rxEng_upd_rsp.read(txSar);
-				rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, (fsm_meta.meta.ackNumb == txSar.nextByte)));
+				ap_uint<32> ackNumb = fsm_meta.meta.ackNumb;
+				ackTest t = testAck(ackNumb, txSar);
+				bool sameAck = (ackNumb == txSar.prevAck);
+				bool outstanding = (txSar.prevAck != txSar.nextByte);
+				bool duplicate = sameAck && outstanding && fsm_meta.meta.length == 0 && fsm_meta.meta.winSize == txSar.recv_window;
+				bool inFast = txSar.fastRetransmitted;
+				bool inLoss = txSar.loss;
+				bool inRecovery = inFast || inLoss;
+				ap_uint<WINDOW_BITS> ackedBytes = ackNumb - txSar.prevAck;
+				ap_uint<WINDOW_BITS> flightBefore = txSar.nextByte - txSar.prevAck;
+				ap_uint<WINDOW_BITS> flightAfter = txSar.nextByte - ackNumb;
+				ap_uint<2> newCount = (txSar.count == 3) ? ap_uint<2>(3) : ap_uint<2>(txSar.count + 1);
+				bool enterFast = duplicate && !inRecovery && newCount == 3 && t.aboveRecover;
+				bool partialAck = t.advancing && inRecovery && t.belowRecover;
+				ap_uint<WINDOW_BITS> halfFlight = flightBefore >> 1;
+				ap_uint<WINDOW_BITS> newThreshold = (halfFlight > 2*MSS) ? halfFlight : ap_uint<WINDOW_BITS>(2*MSS);
+				ap_uint<WINDOW_BITS> grownWindow = txSar.cong_window;
+				if (txSar.cong_window <= (txSar.slowstart_threshold-MSS))
+				{
+					grownWindow += MSS;
+				}
+				else if (txSar.cong_window <= CONGESTION_WINDOW_MAX)
+				{
+					grownWindow += 365;
+				}
+				ap_uint<WINDOW_BITS> inflatedWindow = (txSar.cong_window <= CONGESTION_WINDOW_MAX - MSS) ? ap_uint<WINDOW_BITS>(txSar.cong_window + MSS) : txSar.cong_window;
+				ap_uint<WINDOW_BITS> deflatedWindow = (txSar.cong_window > ackedBytes) ? ap_uint<WINDOW_BITS>(txSar.cong_window - ackedBytes) : ap_uint<WINDOW_BITS>(0);
+				if (ackedBytes >= MSS)
+				{
+					deflatedWindow += MSS;
+				}
+				ap_uint<WINDOW_BITS+1> exitFlight = (flightAfter > MSS) ? ap_uint<WINDOW_BITS+1>(ap_uint<WINDOW_BITS+1>(flightAfter) + MSS) : ap_uint<WINDOW_BITS+1>(2*MSS);
+				ap_uint<WINDOW_BITS> exitWindow = (txSar.slowstart_threshold < exitFlight) ? txSar.slowstart_threshold : ap_uint<WINDOW_BITS>(exitFlight);
+				bool sendRetransmit = false;
+				bool sarWrite = false;
+				bool recoveryWrite = false;
+				bool timerWrite = false;
 				if (tcpState == ESTABLISHED || tcpState == SYN_RECEIVED || tcpState == FIN_WAIT_1 || tcpState == CLOSING || tcpState == LAST_ACK)
 				{
-					// Check if new ACK arrived
-					if (fsm_meta.meta.ackNumb == txSar.prevAck && txSar.prevAck != txSar.nextByte)
+					if (duplicate)
 					{
-						// Not new ACK increase counter only if it does not contain data
-						if (fsm_meta.meta.length == 0)
+						sarWrite = true;
+						if (inFast)
 						{
-							txSar.count++;
+							txSar.cong_window = inflatedWindow;
+						}
+						else if (!inLoss)
+						{
+							txSar.count = newCount;
+							if (enterFast)
+							{
+								txSar.slowstart_threshold = newThreshold;
+								txSar.cong_window = newThreshold + 3*MSS;
+								txSar.recover = txSar.nextByte;
+								txSar.fastRetransmitted = true;
+								recoveryWrite = true;
+								sendRetransmit = true;
+							}
 						}
 					}
-					else
+					else if (t.advancing)
 					{
-						// Notify probeTimer about new ACK
+						sarWrite = true;
+						timerWrite = true;
 						rxEng2timer_clearProbeTimer.write(fsm_meta.sessionID);
-						// Check for SlowStart & Increase Congestion Window
-						if (txSar.cong_window <= (txSar.slowstart_threshold-MSS))
-						{
-							txSar.cong_window += MSS;
-						}
-						else if (txSar.cong_window <= CONGESTION_WINDOW_MAX) //0xF7FF
-						{
-							txSar.cong_window += 365; //TODO replace by approx. of (MSS x MSS) / cong_window
-						}
 						txSar.count = 0;
-						txSar.fastRetransmitted = false;
+						if (partialAck)
+						{
+							sendRetransmit = true;
+							txSar.cong_window = inFast ? deflatedWindow : grownWindow;
+						}
+						else
+						{
+							txSar.cong_window = inFast ? exitWindow : grownWindow;
+							if (inRecovery)
+							{
+								txSar.fastRetransmitted = false;
+								txSar.loss = false;
+								recoveryWrite = true;
+							}
+							else
+							{
+								txSar.recover = txSar.prevAck;
+							}
+						}
 					}
-					// TX SAR
-					if ((txSar.prevAck <= fsm_meta.meta.ackNumb && fsm_meta.meta.ackNumb <= txSar.nextByte)
-							|| ((txSar.prevAck <= fsm_meta.meta.ackNumb || fsm_meta.meta.ackNumb <= txSar.nextByte) && txSar.nextByte < txSar.prevAck))
+					else if (sameAck)
 					{
-						rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, txSar.count, ((txSar.count == 3) || txSar.fastRetransmitted))));
+						sarWrite = true;
+					}
+					if (sarWrite)
+					{
+						rxEng2txSar_upd_req.write(rxTxSarQuery(fsm_meta.sessionID, ackNumb, fsm_meta.meta.winSize, txSar.cong_window, txSar.slowstart_threshold, txSar.recover, txSar.count, txSar.fastRetransmitted, txSar.loss, recoveryWrite));
 					}
 
 // 					// Check if packet contains payload
@@ -1334,7 +1417,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 
 
 #if FAST_RETRANSMIT
-					if (txSar.count == 3 && !txSar.fastRetransmitted)
+					if (sendRetransmit)
 					{
 						rxEng2eventEng_setEvent.write(event(RT, fsm_meta.sessionID));
 					}
@@ -1401,7 +1484,10 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					}
 					rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, tcpState, 1));
 				}
-				//fsm_state = LOAD;
+				if (timerWrite)
+				{
+					rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, t.allAcked, t.aboveRecover));
+				}
 			}
 			break;
 		case 2: //SYN
@@ -1472,7 +1558,6 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				stateTable2rxEng_upd_rsp.read(tcpState);
 				rxSar2rxEng_upd_rsp.read(rxSar);
 				txSar2rxEng_upd_rsp.read(txSar);
-				rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, (fsm_meta.meta.ackNumb == txSar.nextByte)));
 				std::cout<<"RX_SYN_ACK: ";
 				std::cout<<std::dec<<" session id:"<<fsm_meta.sessionID;
 				std::cout<<" seqNum:"<<fsm_meta.meta.seqNumb;
@@ -1484,6 +1569,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				// std::cout<<" free_space"<<free_space<<std::endl;
 				if ((tcpState == SYN_SENT) && (fsm_meta.meta.ackNumb == txSar.nextByte))// && !mh_lup.created)
 				{
+					rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, true, true));
 #if (WINDOW_SCALE)
 					ap_uint<4> rx_win_shift = (fsm_meta.meta.winScale == 0) ? 0 : WINDOW_SCALE_BITS;
 					ap_uint<4> tx_win_shift = fsm_meta.meta.winScale;
@@ -1531,11 +1617,15 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				std::cout<<" length:"<<fsm_meta.meta.length;		
 				std::cout<<" gap:"<<rxSar.gap<<std::endl;
 				// std::cout<<" free_space"<<free_space<<std::endl;
-				rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, (fsm_meta.meta.ackNumb == txSar.nextByte)));
+				ackTest finAck = testAck(fsm_meta.meta.ackNumb, txSar);
+				if (finAck.advancing)
+				{
+					rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, finAck.allAcked, finAck.aboveRecover));
+				}
 				// Check state and if FIN in order, Current out of order FINs are not accepted
 				if ((tcpState == ESTABLISHED || tcpState == FIN_WAIT_1 || tcpState == FIN_WAIT_2) && (rxSar.recvd == fsm_meta.meta.seqNumb))
 				{
-					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, txSar.count, txSar.fastRetransmitted))); //TODO include count check
+					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, txSar.slowstart_threshold, txSar.recover, txSar.count, txSar.fastRetransmitted, txSar.loss, 0)));
 
 					// +1 for phantom byte, there might be data too
 					rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, fsm_meta.meta.seqNumb+fsm_meta.meta.length+1, fsm_meta.meta.seqNumb+fsm_meta.meta.length+1, rxSar.offset,rxSar.gap)); //diff to ACK

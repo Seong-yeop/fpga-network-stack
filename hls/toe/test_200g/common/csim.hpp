@@ -131,6 +131,25 @@ static void write_data(Bench &b,unsigned n,unsigned settle=150) {
 static unsigned warm_window(Bench &b,unsigned segs) {
  bool ack=b.autoAck;b.autoAck=true;for(unsigned i=0;i<segs;i++)transmit_data(b,8960);b.autoAck=ack;return segs*8960;
 }
+static unsigned sweeps(unsigned n) { return n*MAX_SESSIONS; }
+static void wait_tx(Bench &b,unsigned bytes,const char *why) {
+ unsigned limit=b.cycles+4000;while(b.txPayload<bytes){check(b.cycles<limit,why);b.tick();}
+}
+static void expect_read(const Bench &b,unsigned index,unsigned seq,unsigned len,const char *why) {
+ check(b.readLog.size()>index,why);
+ check((b.readLog[index].saddr.to_uint()&(BUFFER_SIZE-1))==(seq&(BUFFER_SIZE-1)),why);
+ check(b.readLog[index].bbt==len,why);
+}
+static void no_read_until(Bench &b,unsigned count,unsigned until,const char *why) {
+ while(b.cycles<until){b.tick();check(b.readLog.size()==count,why);}
+}
+static void wait_read(Bench &b,unsigned count,unsigned until,const char *why) {
+ while(b.readLog.size()<count&&b.cycles<until)b.tick();
+ check(b.readLog.size()==count,why);
+}
+static Bytes ack_with_window(const Bench &b,unsigned ack,unsigned win) {
+ Bytes p=packet(b.seq,ack,16);put(p,34,win);return resign(p);
+}
 static int run_case(const char *name,void (*test)()) {
  try {test();std::cout<<std::dec<<"PASS "<<name<<" width="<<DATA_WIDTH<<std::endl;return 0;}
  catch(const std::exception &e){std::cerr<<"FAIL "<<name<<": "<<e.what()<<std::endl;return 1;}

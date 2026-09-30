@@ -12,7 +12,7 @@ task automatic case_step;
  if(connected[0] && cycle>45000)case(case_phase)
   0:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<6)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM)begin case_start=cycle;case_phase=1;end end
   1:if(cycle-case_start>4000)begin auto_ack=0;case_phase=2;end
-  2:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<13)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+7*8960)begin case_start=cycle;case_phase=3;end end
+  2:if(!tx_pending[0] && retry_len[0]==0)begin if(issued<12)begin request_tx(0,8960);issued++;end else if(tx_count[0]==WARM+6*8960)begin case_start=cycle;case_phase=3;end end
   3:if(cycle-case_start>200)begin
    capture=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+8960,16);
    for(int i=0;i<6;i++)begin peer_window=(i%2)?65535:32768;send_packet(0,peer_seq[0],server_seq[0]+WARM+8960,16);end
@@ -23,12 +23,21 @@ task automatic case_step;
    for(int i=0;i<3;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+8960,16);
    case_start=cycle;case_phase=5;
   end
-  5:if(rt_reads.size()>=1)begin expect_read(0,server_seq[0]+WARM+8960,"fast retransmission");auto_ack=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+7*8960,16);case_start=cycle;case_phase=6;end
+  5:if(rt_reads.size()>=1)begin expect_read(0,server_seq[0]+WARM+8960,"fast retransmission");case_start=cycle;case_phase=6;end
    else if(cycle-case_start>20000)$fatal(1,"three true duplicate ACKs did not fast-retransmit");
-  6:if(cycle-case_start>6000)begin
-   if(rt_reads.size()!=1)$fatal(1,"%0d reads after the cumulative ACK, expected 1",rt_reads.size());
-   capture=0;if(!tx_pending[0])begin request_tx(0,64);case_phase=7;end
+  6:if(cycle-case_start>2000)begin
+   if(rt_reads.size()!=1)$fatal(1,"fast retransmission read %0d segments, expected one",rt_reads.size());
+   for(int i=0;i<2;i++)send_packet(0,peer_seq[0],server_seq[0]+WARM+8960,16);
+   case_start=cycle;case_phase=7;
   end
-  7:if(tx_count[0]==WARM+7*8960+64)case_done=1;
+  7:if(cycle-case_start>5000)begin
+   if(rt_reads.size()!=1)$fatal(1,"further duplicate ACKs resent (%0d reads)",rt_reads.size());
+   auto_ack=1;send_packet(0,peer_seq[0],server_seq[0]+WARM+6*8960,16);case_start=cycle;case_phase=8;
+  end
+  8:if(cycle-case_start>6000)begin
+   if(rt_reads.size()!=1)$fatal(1,"%0d reads after the cumulative ACK, expected 1",rt_reads.size());
+   capture=0;if(!tx_pending[0])begin request_tx(0,64);case_phase=9;end
+  end
+  9:if(tx_count[0]==WARM+6*8960+64)case_done=1;
  endcase
 endtask

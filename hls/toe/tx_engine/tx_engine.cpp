@@ -89,7 +89,6 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 	static extendedEvent ml_curEvent;
 	static ap_uint<32> ml_randomValue= 0x562301af; //Random seed initialization
 
-	static ap_uint<2> ml_segmentCount = 0;
 	static rxSarReply	rxSar;
 	static txTxSarReply	txSarReg;
 	ap_uint<WINDOW_BITS> slowstart_threshold;
@@ -151,7 +150,6 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 			ml_FsmState = 1;
 			ml_randomValue++; //make sure it doesn't become zero TODO move this out of if, but breaks my testsuite
 		} //if not empty
-		ml_segmentCount = 0;
 		break;
 	case 1:
 		switch(ml_curEvent.type)
@@ -367,27 +365,25 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				}
 #endif
 
-				//TODO use  usedLengthWithFIN
-				ap_uint<WINDOW_BITS> currLength = txSar.usedLength; //((ap_uint<WINDOW_BITS>) txSar.not_ackd - txSar.ackd);
+				ap_uint<WINDOW_BITS> currLength = txSar.usedLength;
+				ap_uint<WINDOW_BITS> dataLength = txSar.finSent ? ap_uint<WINDOW_BITS>(currLength - 1) : currLength;
 
 				meta.ackNumb = rxSar.recvd;
 				meta.seqNumb = txSar.ackd;
-				meta.window_size = rxSar.windowSize; //Precalcualted in rx_sar_table ((rxSar.appd - rxSar.recvd) - 1)
-				meta.ack = 1; // ACK is always set when session is established
+				meta.window_size = rxSar.windowSize;
+				meta.ack = 1;
 				meta.rst = 0;
 				meta.syn = 0;
 				meta.fin = 0;
 
-				// Construct address before modifying txSar.ackd
 				ap_uint<32> pkgAddr;
-				pkgAddr(31, 30) = 0x00; //TODO: this is combined with addr offset calculation in mem_inf to separate rx and tx
+				pkgAddr(31, 30) = 0x00;
 				pkgAddr(29, WINDOW_BITS) = ml_curEvent.sessionID(13, 0);
-				pkgAddr(WINDOW_BITS-1, 0) = txSar.ackd(WINDOW_BITS-1, 0); //ml_curEvent.address;
+				pkgAddr(WINDOW_BITS-1, 0) = txSar.ackd(WINDOW_BITS-1, 0);
 
-				// Decrease Slow Start Threshold, only on first RT from retransmitTimer
-				if (!ml_sarLoaded && (ml_curEvent.rt_count == 1))
+				if (ml_curEvent.rt_count != 0 && currLength != 0)
 				{
-					if (currLength > (4*segmentMss)) // max( FlightSize/2, 2*segmentMss) RFC:5681
+					if (currLength > (4*segmentMss))
 					{
 						slowstart_threshold = currLength/2;
 					}
@@ -395,40 +391,27 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					{
 						slowstart_threshold = (2 * segmentMss);
 					}
-					txEng2txSar_upd_req.write(txTxSarRtQuery(ml_curEvent.sessionID, slowstart_threshold));
+					txEng2txSar_upd_req.write(txTxSarRtQuery(ml_curEvent.sessionID, slowstart_threshold, ml_curEvent.rt_count == 1));
 				}
 
-
-				// Since we are retransmitting from txSar.ackd to txSar.not_ackd, this data is already inside the usableWindow
-				// => no check is required
-				// Only check if length is bigger than MMS
-				if (currLength > segmentMss)
+				if (currLength == 0)
 				{
-					// We stay in this state and sent immediately another packet
-					meta.length = segmentMss;
-					txSar.ackd += segmentMss;
-					txSar.usedLength -= segmentMss;
-					// TODO replace with dynamic count, remove this
-					if (ml_segmentCount == 3)
+					meta.length = 0;
+					ml_FsmState = 0;
+				}
+				else if (txSar.finSent && currLength == 1)
+				{
+					meta.length = 0;
+					ml_curEvent.type = FIN;
+					if (ml_curEvent.rt_count == 0)
 					{
-						// Should set a probe or sth??
-						//txEng2txSar_upd_req.write(txTxSarQuery(ml_curEvent.sessionID, txSar.not_ackd, 1));
-						ml_FsmState = 0;
+						ml_curEvent.rt_count = 1;
 					}
-					ml_segmentCount++;
 				}
 				else
 				{
-					meta.length = currLength;
-					if (txSar.finSent)
-					{
-						ml_curEvent.type = FIN;
-					}
-					else
-					{
-						// set RT here???
-						ml_FsmState = 0;
-					}
+					meta.length = (dataLength > segmentMss) ? ap_uint<WINDOW_BITS>(segmentMss) : dataLength;
+					ml_FsmState = 0;
 				}
 
 				// Only send a packet if there is data
