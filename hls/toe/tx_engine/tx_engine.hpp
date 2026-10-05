@@ -47,11 +47,14 @@ struct tx_engine_meta //same as rxEngine
 	ap_uint<1>	syn;
 	ap_uint<1>	fin;
 	ap_uint<1>	sack_permitted;
+	ap_uint<1>	sack;
+	ap_uint<32>	sack_left;
+	ap_uint<32>	sack_right;
 	tx_engine_meta() {}
 	tx_engine_meta(ap_uint<1> ack, ap_uint<1> rst, ap_uint<1> syn, ap_uint<1> fin)
-			:seqNumb(0), ackNumb(0), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0) {}
+			:seqNumb(0), ackNumb(0), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0), sack(0), sack_left(0), sack_right(0) {}
 	tx_engine_meta(ap_uint<32> seqNumb, ap_uint<32> ackNumb, ap_uint<1> ack, ap_uint<1> rst, ap_uint<1> syn, ap_uint<1> fin)
-			:seqNumb(seqNumb), ackNumb(ackNumb), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0) {}
+			:seqNumb(seqNumb), ackNumb(ackNumb), window_size(0), length(0), ack(ack), rst(rst), syn(syn), fin(fin), sack_permitted(0), sack(0), sack_left(0), sack_right(0) {}
 };
 
 /** @ingroup tx_engine

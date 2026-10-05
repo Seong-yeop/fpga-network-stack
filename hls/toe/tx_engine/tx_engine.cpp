@@ -107,6 +107,9 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 			eventEng2txEng_event.read(ml_curEvent);
 			readCountFifo.write(1);
 			ml_sarLoaded = false;
+			meta.sack = 0;
+			meta.sack_left = 0;
+			meta.sack_right = 0;
 			//NOT necessary for SYN/SYN_ACK only needs one
 			switch (ml_curEvent.type)
 			{
@@ -461,6 +464,13 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				meta.rst = 0;
 				meta.syn = 0;
 				meta.fin = 0;
+				if (rxSar.gap && rxSar.sack_ok)
+				{
+					meta.sack = 1;
+					meta.sack_left = rxSar.offset;
+					meta.sack_right = rxSar.head;
+					meta.length = 12;
+				}
 				txEng_ipMetaFifoOut.write(meta.length);
 				txEng_tcpMetaFifoOut.write(meta);
 				txEng_isLookUpFifoOut.write(true);
@@ -1060,6 +1070,9 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 	static tcpFullPseudoHeader<WIDTH> header; //size 256Bit
 	static bool hasBody = false;
 	static bool isSYN = false;
+	static bool hasSack = false;
+	static ap_uint<32> sackLeft = 0;
+	static ap_uint<32> sackRight = 0;
 	static ap_uint<4> win_shift = 0;
 	static ap_uint<1> sackPermitted = 0;
 
@@ -1083,7 +1096,10 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 			win_shift = meta.win_shift;
 #endif
 			sackPermitted = meta.sack_permitted;
-			if (meta.syn)
+			hasSack = meta.sack == 1 && !meta.syn;
+			sackLeft = meta.sack_left;
+			sackRight = meta.sack_right;
+			if (meta.syn || hasSack)
 			{
 				header.setDataOffset(0x5 + (meta.length >> 2));
 			}
@@ -1097,7 +1113,7 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 			header.setRstFlag(meta.rst);
 			header.setAckFlag(meta.ack);
 
-			hasBody = meta.length != 0 && !meta.syn;
+			hasBody = meta.length != 0 && !meta.syn && !hasSack;
 			isSYN = meta.syn;
 
 
@@ -1191,6 +1207,19 @@ void pseudoHeaderConstructionNew(stream<tx_engine_meta>&		tcpMetaDataFifoIn,
 					sendWord.keep(39, 36) = 0xF;
 				}
 			}
+		}
+		else if (hasSack && WIDTH >= 512)
+		{
+			sendWord.data(263, 256) = 0x01;
+			sendWord.data(271, 264) = 0x01;
+			sendWord.data(279, 272) = 0x05;
+			sendWord.data(287, 280) = 0x0A;
+			sendWord.data(319, 288) = reverse(sackLeft);
+			sendWord.data(351, 320) = reverse(sackRight);
+#ifndef __SYNTHESIS__
+			sendWord.data(WIDTH-1, 352) = 0;
+#endif
+			sendWord.keep(43, 32) = 0xFFF;
 		}
 
 		dataOut.write(sendWord);

@@ -1887,7 +1887,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 	#pragma HLS aggregate  variable=rand_notificationBuffer compact=bit
 
 	static ap_uint<1>		rxAppNotificationDoubleAccessFlag = false;
-	static ap_uint<5>		rand_fifoCount = 0;
+	static ap_uint<6>		rand_fifoCount = 0;
 	static mmStatus			rxAppNotificationStatus1, rxAppNotificationStatus2;
 	static appNotification	rxAppNotification;
 	static ap_uint<3>		split_left = 0;
@@ -1935,7 +1935,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 			}
 			//TODO else, we are screwed since the ACK is already sent
 		}
-		else if (!internalNotificationFifoIn.empty() && (rand_fifoCount < 31)) {
+		else if (!internalNotificationFifoIn.empty() && (rand_fifoCount < 63)) {
 			internalNotificationFifoIn.read(rxAppNotification);
 			//if (rxAppNotification.length != 0) {
 			//	rand_notificationBuffer.write(rxAppNotification);
@@ -2237,7 +2237,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	#pragma HLS aggregate  variable=rxPkgDrop2rxMemWriter compact=bit
 
 	static stream<ap_uint<1> >				rxEngDoubleAccess("rxEngDoubleAccess");
-	#pragma HLS stream variable=rxEngDoubleAccess depth=8
+	#pragma HLS stream variable=rxEngDoubleAccess depth=64
 
 
 	//TODO move

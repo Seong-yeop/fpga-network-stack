@@ -148,12 +148,15 @@ struct rxSarReply
 	ap_uint<16>	windowSize;
 	ap_uint<WINDOW_BITS>	usedLength;
 	bool sack_ok;
+	ap_uint<32> head;
+	ap_uint<32> offset;
+	bool gap;
 	rxSarReply() {}
 	rxSarReply(rxSarEntry entry)
 #if !(WINDOW_SCALE)
-		:recvd(entry.recvd), sack_ok(entry.sack_ok) {}
+		:recvd(entry.recvd), sack_ok(entry.sack_ok), head(entry.head), offset(entry.offset), gap(entry.gap) {}
 #else
-		:recvd(entry.recvd), win_shift(entry.win_shift), sack_ok(entry.sack_ok) {}
+		:recvd(entry.recvd), win_shift(entry.win_shift), sack_ok(entry.sack_ok), head(entry.head), offset(entry.offset), gap(entry.gap) {}
 #endif
 };
 
