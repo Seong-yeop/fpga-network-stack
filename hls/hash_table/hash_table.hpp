@@ -30,7 +30,10 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "../axi_utils.hpp"
 #include <math.h>
 
-const uint32_t MAX_NUMBER_OF_ENTRIES = TCP_STACK_MAX_SESSIONS;
+#ifndef TCP_STACK_HASH_ENTRIES
+#define TCP_STACK_HASH_ENTRIES TCP_STACK_MAX_SESSIONS
+#endif
+const uint32_t MAX_NUMBER_OF_ENTRIES = TCP_STACK_HASH_ENTRIES;
 
 //Copied from hlslib by Johannes de Fine Licht https://github.com/definelicht/hlslib/blob/master/include/hlslib/xilinx/Utility.h
 constexpr unsigned long ConstLog2(unsigned long val) {
