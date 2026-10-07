@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 width=${1:-128}; stage=${2:-csim}; selected=${3:-all}
 case "$width" in 64|128) ;; *) exit 2;; esac
-cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit retransmit_window retransmit_wrap dupack_window recover_gate retransmit_two_holes retransmit_tail retransmit_lost rto_one_segment stitch sack_scoreboard sack_negotiate sack_gro sack_threshold sack_dsack sack_old_ack sack_with_data sack_not_negotiated sack_rto_clear sack_blocks sack_multiword reconnect_after_loss)
+cases=(ack reorder sequence_wrap errors options connection active_open multisession backpressure timers close closed_port malformed_options tx_sequence_wrap probe_timer write_retransmit retransmit_window retransmit_wrap dupack_window recover_gate retransmit_two_holes retransmit_tail retransmit_lost rto_one_segment stitch sack_scoreboard sack_negotiate sack_gro sack_threshold sack_dsack sack_old_ack sack_with_data sack_not_negotiated sack_rto_clear sack_blocks sack_multiword reconnect_after_loss syn_exhaust close_notify fin_wait2_timeout fin_wait2_fin fin_rto_exhaust fin_wait2_rst_reuse)
 if [[ "$selected" != all ]]; then
  case "$selected" in
  initial_window|rtt_sample)

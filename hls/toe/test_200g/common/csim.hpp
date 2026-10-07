@@ -46,7 +46,7 @@ struct Bench {
  stream<ap_uint<16>> listen,close,rxMeta;stream<appReadRequest> read;
  stream<ipTuple> open;stream<appTxMeta> txMeta;stream<bool> listened;
  stream<appNotification> notices;stream<openStatus> opened;stream<appTxRsp> txRsp;
- ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, expectWS=true, sackOk=false, autoAck=true, allowNoSpace=false;unsigned delay=1, closeNotices=0, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
+ ap_uint<16> count=0;unsigned cycles=0,seq=1001,ack=0,sid=0,myPort=5001; bool synack=false, finAck=true, expectWS=true, sackOk=false, autoAck=true, allowNoSpace=false;unsigned delay=1, closeNotices=0, finCount=0, openReplies=0, writePauseUntil=0, readPauseUntil=0, readCommands=0, noSpace=0, accepted=0;std::deque<Bytes> packets;std::vector<mmCmd> readLog;
  std::map<threeTupleInternal,unsigned> table;std::map<unsigned,unsigned char> memory;
  std::deque<unsigned> pendingLengths, lengths;std::deque<Axis> fifo;std::deque<mmCmd> writes,reads; unsigned wo=0,ro=0;
 #if !(RX_DDR_BYPASS)
@@ -90,7 +90,7 @@ struct Bench {
   if(cycles%delay==0 && !reads.empty()&&txRead.empty()){Axis a{};a.data=0;a.keep=0;a.strb=0;auto c=reads.front();for(unsigned j=0;j<DATA_WIDTH/8 && ro<c.bbt;j++,ro++){a.data(j*8+7,j*8)=memory.at(c.saddr.to_uint()+ro);a.keep[j]=1;}a.strb=a.keep;a.last=ro==c.bbt;txRead.write(a);if(a.last){reads.pop_front();ro=0;}}
   if(!txRsp.empty()){auto r=txRsp.read();if(r.error==0)accepted++;if(allowNoSpace&&r.error==2)noSpace++;else if(r.error!=0){static std::string m;m="TX request rejected err="+std::to_string(r.error.to_uint())+" len="+std::to_string(r.length.to_uint())+" space="+std::to_string(r.remaining_space.to_uint())+" cycle="+std::to_string(cycles);check(false,m.c_str());}}
   if(!opened.empty()){auto r=opened.read();check(r.success,"open failed");sid=r.sessionID;openReplies++;}
-  if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){bool synAck=out[33]&16;bool sack=synAck?sackOk:true;check(out.size()==44+(expectWS?4:0)+(sack?4:0),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");unsigned sp=expectWS?47:44;check(sack?(out[sp]==4&&out[sp+1]==2):(out.size()<=48&&(!expectWS||out[47]==0)),"SYN SACK-permitted option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
+  if(!ipTx.empty()){auto a=ipTx.read();append(out,a);if(a.last){check(out.size()>=40,"short TCP packet");check(get(out,10)==0,"IP checksum placeholder");Bytes p(out.begin()+12,out.begin()+20);p.push_back(0);p.push_back(6);p.push_back((out.size()-20)>>8);p.push_back(out.size()-20);p.insert(p.end(),out.begin()+20,out.end());check(checksum(p)==0,"TCP checksum");if(out[33]&2){bool synAck=out[33]&16;bool sack=synAck?sackOk:true;check(out.size()==44+(expectWS?4:0)+(sack?4:0),"SYN option length");check(out[40]==2&&get(out,42)==8960,"SYN MSS option");if(expectWS)check(out[44]==3&&out[46]==3,"SYN WS option");unsigned sp=expectWS?47:44;check(sack?(out[sp]==4&&out[sp+1]==2):(out.size()<=48&&(!expectWS||out[47]==0)),"SYN SACK-permitted option");ack=get(out,24,4)+1;myPort=get(out,20);synack=true;} unsigned h=20+(out[32]>>4)*4; if(out[33]&1){fin=true;finCount++;if(finAck)send(ipRx,packet(seq,get(out,24,4)+1,16,{},false,myPort));} if(out.size()>h){unsigned offset=get(out,24,4)-ack;check(offset+out.size()-h<=expectedTx.size(),"TX unexpected bytes");for(unsigned i=h;i<out.size();i++)check(out[i]==expectedTx[offset+i-h],"TX payload mismatch");txPayload=std::max(txPayload,offset+unsigned(out.size()-h));if(autoAck)send(ipRx,packet(seq,get(out,24,4)+out.size()-h,16,{},false,myPort));}packets.push_back(out);out.clear();}}
  }
  void run(unsigned n){for(unsigned i=0;i<n;i++)tick();}
 };
@@ -142,6 +142,11 @@ static unsigned warm_window(Bench &b,unsigned segs) {
  bool ack=b.autoAck;b.autoAck=true;for(unsigned i=0;i<segs;i++)transmit_data(b,8960);b.autoAck=ack;return segs*8960;
 }
 static unsigned sweeps(unsigned n) { return n*MAX_SESSIONS; }
+static void reopen(Bench &b,unsigned isn,unsigned port) {
+ peerPort=port;b.seq=isn+1;b.synack=false;b.fin=false;b.received.clear();b.expectedTx.clear();b.txPayload=0;b.packets.clear();
+ send(b.ipRx,packet_syn(isn,b.sackOk,3));b.run(1000);check(b.synack,"SYN-ACK of the new connection missing");
+ send(b.ipRx,packet(b.seq,b.ack,16));b.run(300);b.packets.clear();
+}
 static void wait_tx(Bench &b,unsigned bytes,const char *why) {
  unsigned limit=b.cycles+4000;while(b.txPayload<bytes){check(b.cycles<limit,why);b.tick();}
 }

@@ -66,12 +66,15 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 				stream<stateQuery>&				txApp2stateTable_upd_req,
 				stream<event>&					txApp2eventEng_setEvent,
 				stream<openStatus>&				rtTimer2txApp_notification,
+				stream<ap_uint<16> >&			closeTimer2txApp_release,
+				stream<ap_uint<16> >&			txApp2timer_release,
+				stream<appNotification>&		txApp2rxApp_notification,
 				ap_uint<32>						myIpAddress)
 {
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
 
-	enum taiFsmStateType {IDLE, CLOSE_CONN};
+	enum taiFsmStateType {IDLE, CLOSE_CONN, CLOSE_TIMER};
 	static taiFsmStateType tai_fsmState = IDLE;
 	static ap_uint<16> tai_closeSessionID;
 
@@ -126,13 +129,19 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID));
 			tai_fsmState = CLOSE_CONN;
 		}
+		else if (!closeTimer2txApp_release.empty() && !txApp2timer_release.full() && !txApp2rxApp_notification.full())
+		{
+			closeTimer2txApp_release.read(tai_closeSessionID);
+			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID));
+			tai_fsmState = CLOSE_TIMER;
+		}
 		break;
 	case CLOSE_CONN:
 		if (!stateTable2txApp_upd_rsp.empty())
 		{
 			stateTable2txApp_upd_rsp.read(state);
 			//TODO might add CLOSE_WAIT here???
-			if ((state == ESTABLISHED) || (state == FIN_WAIT_2) || (state == FIN_WAIT_1)) //TODO Why if FIN already SENT
+			if (state == ESTABLISHED)
 			{
 				txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID, FIN_WAIT_1, 1));
 				txApp2eventEng_setEvent.write(event(FIN, tai_closeSessionID));
@@ -141,6 +150,22 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 			{
 				// Have to release lock
 				txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID, state, 1));
+			}
+			tai_fsmState = IDLE;
+		}
+		break;
+	case CLOSE_TIMER:
+		if (!stateTable2txApp_upd_rsp.empty())
+		{
+			stateTable2txApp_upd_rsp.read(state);
+			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID, state, 1));
+			if ((state == FIN_WAIT_2) || (state == TIME_WAIT))
+			{
+				txApp2timer_release.write(tai_closeSessionID);
+			}
+			if (state == FIN_WAIT_2)
+			{
+				txApp2rxApp_notification.write(appNotification(tai_closeSessionID, true));
 			}
 			tai_fsmState = IDLE;
 		}

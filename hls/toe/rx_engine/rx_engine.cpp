@@ -922,6 +922,7 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 	static ap_uint<32> mh_srcIpAddress;
 	static ap_uint<16> mh_dstIpPort;
 	static ap_uint<16> mh_srcIpPort;
+	static fourTuple mh_tuple;
 
 	fourTuple tuple;
 	bool portIsOpen;
@@ -934,6 +935,7 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 			metaDataFifoIn.read(mh_meta);
 			portTable2rxEng_rsp.read(portIsOpen);
 			tupleBufferIn.read(tuple);
+			mh_tuple = tuple;
 			mh_srcIpAddress(7, 0) = tuple.srcIp(31, 24);
 			mh_srcIpAddress(15, 8) = tuple.srcIp(23, 16);
 			mh_srcIpAddress(23, 16) = tuple.srcIp(15, 8);
@@ -984,18 +986,28 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 		if (!sLookup2rxEng_rsp.empty())
 		{
 			sLookup2rxEng_rsp.read(mh_lup);
+			bool refuse = !mh_lup.hit && mh_meta.syn && !mh_meta.rst;
 			if (mh_lup.hit)
 			{
 				//Write out lup and meta
 				fsmMetaDataFifo.write(rxFsmMetaData(mh_lup.sessionID, mh_srcIpAddress, mh_dstIpPort, mh_meta, mh_srcIpPort));
 			}
+			else if (refuse)
+			{
+				fourTuple switchedTuple;
+				switchedTuple.srcIp = mh_tuple.dstIp;
+				switchedTuple.dstIp = mh_tuple.srcIp;
+				switchedTuple.srcPort = mh_tuple.dstPort;
+				switchedTuple.dstPort = mh_tuple.srcPort;
+				rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length+1), switchedTuple));
+			}
 			if (mh_meta.length != 0)
 			{
 				dropDataFifoOut.write(!mh_lup.hit);
-#ifdef V80_RX_DEBUG
-				if (!mh_lup.hit) dbg_lookup_miss++;
-#endif
 			}
+#ifdef V80_RX_DEBUG
+			if (!mh_lup.hit && (mh_meta.length != 0 || refuse)) dbg_lookup_miss++;
+#endif
 			/*if (!mh_lup.hit)
 			{
 				// Port is Open, but we have no sessionID, that matches or is free
@@ -1210,7 +1222,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				bool sarWrite = false;
 				bool recoveryWrite = false;
 				bool timerWrite = false;
-				if (tcpState == ESTABLISHED || tcpState == SYN_RECEIVED || tcpState == FIN_WAIT_1 || tcpState == CLOSING || tcpState == LAST_ACK)
+				if (tcpState == ESTABLISHED || tcpState == SYN_RECEIVED || tcpState == FIN_WAIT_1 || tcpState == FIN_WAIT_2 || tcpState == CLOSING || tcpState == LAST_ACK)
 				{
 					if (t.advancing)
 					{
@@ -1500,6 +1512,17 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						case SYN_RECEIVED:
 							rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, ESTABLISHED, 1)); //TODO MAYBE REARRANGE
 							break;
+						case FIN_WAIT_1:
+							if (txSar.finSent)
+							{
+								rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, FIN_WAIT_2, 1));
+								rxEng2timer_setCloseTimer.write(fsm_meta.sessionID);
+							}
+							else
+							{
+								rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, tcpState, 1));
+							}
+							break;
 						case CLOSING:
 							rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, TIME_WAIT, 1));
 							rxEng2timer_setCloseTimer.write(fsm_meta.sessionID);
@@ -1696,10 +1719,9 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort, true));
 						dropDataFifoOut.write(false);
 					}
-					else if (tcpState == ESTABLISHED)
+					else
 					{
-						// Tell Application connection got closed
-						rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.srcIpAddress, fsm_meta.dstIpPort, true)); //CLOSE
+						rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.srcIpAddress, fsm_meta.dstIpPort, true));
 					}
 
 					// Update state
@@ -1710,7 +1732,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					}
 					else //FIN_WAIT_1 || FIN_WAIT_2
 					{
-						if (fsm_meta.meta.ackNumb == txSar.nextByte) //check if final FIN is ACK'd -> LAST_ACK
+						if (tcpState == FIN_WAIT_2 || fsm_meta.meta.ackNumb == txSar.nextByte)
 						{
 							rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, TIME_WAIT, 1));
 							rxEng2timer_setCloseTimer.write(fsm_meta.sessionID);

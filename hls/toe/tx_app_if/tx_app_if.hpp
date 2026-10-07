@@ -46,4 +46,7 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 				stream<stateQuery>&				txApp2stateTable_upd_req,
 				stream<event>&					txApp2eventEng_setEvent,
 				stream<openStatus>&				rtTimer2txApp_notification,
+				stream<ap_uint<16> >&			closeTimer2txApp_release,
+				stream<ap_uint<16> >&			txApp2timer_release,
+				stream<appNotification>&		txApp2rxApp_notification,
 				ap_uint<32>						myIpAddress);

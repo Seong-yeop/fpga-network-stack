@@ -260,7 +260,8 @@ void tx_sar_table(	stream<rxTxSarQuery>&			rxEng2txSar_upd_req,
 													tx_table[tst_rxEngUpdate.sessionID].fastRetransmitted,
 													tx_table[tst_rxEngUpdate.sessionID].recv_window,
 													tx_table[tst_rxEngUpdate.sessionID].recover,
-													tx_table[tst_rxEngUpdate.sessionID].loss));
+													tx_table[tst_rxEngUpdate.sessionID].loss,
+													tx_table[tst_rxEngUpdate.sessionID].finSent));
 		}
 	}
 }

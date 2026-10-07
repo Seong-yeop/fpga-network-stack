@@ -9,7 +9,7 @@ cd $here
 set case_name ""
 if {[info exists ::env(TOE_CASE)]} {set case_name $::env(TOE_CASE)}
 if {$case_name ne ""} {
- if {![regexp {^[a-z_]+$} $case_name]} {error "invalid TOE_CASE"}
+ if {![regexp {^[a-z][a-z0-9_]*$} $case_name]} {error "invalid TOE_CASE"}
  set case_file $here/cases/tb_${case_name}.cpp
  if {![file exists $case_file]} {error "unknown C-sim case $case_name"}
  if {$stage ne "csim"} {error "case selection applies to C-sim only"}

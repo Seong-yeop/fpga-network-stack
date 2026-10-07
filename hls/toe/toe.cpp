@@ -84,6 +84,8 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 					stream<ap_uint<16> >&				rxEng2timer_clearProbeTimer,
 					stream<ap_uint<16> >&				txEng2timer_setProbeTimer,
 					stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,
+					stream<ap_uint<16> >&				txApp2timer_release,
+					stream<ap_uint<16> >&				closeTimer2txApp_release,
 					stream<ap_uint<16> >&				timer2stateTable_releaseState,
 					stream<event>&						timer2eventEng_setEvent,
 					stream<appNotification>&			rtTimer2rxApp_notification,
@@ -91,9 +93,7 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 {
 	#pragma HLS INLINE
 	
-	static stream<ap_uint<16> > closeTimer2stateTable_releaseState("closeTimer2stateTable_releaseState");
 	static stream<ap_uint<16> > rtTimer2stateTable_releaseState("rtTimer2stateTable_releaseState");
-	#pragma HLS stream variable=closeTimer2stateTable_releaseState		depth=2
 	#pragma HLS stream variable=rtTimer2stateTable_releaseState			depth=2
 
 	static stream<event> rtTimer2eventEng_setEvent("rtTimer2eventEng_setEvent");
@@ -114,8 +114,8 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 				txEng2timer_setProbeTimer,
 				probeTimer2eventEng_setEvent);
 	close_timer(rxEng2timer_setCloseTimer,
-				closeTimer2stateTable_releaseState);
-	stream_merger(		closeTimer2stateTable_releaseState,
+				closeTimer2txApp_release);
+	stream_merger(		txApp2timer_release,
 						rtTimer2stateTable_releaseState,
 						timer2stateTable_releaseState);
 }
@@ -374,6 +374,7 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 					stream<bool>&					portTable2rxApp_listen_rsp,
 					stream<appNotification>&		rxEng2rxApp_notification,
 					stream<appNotification>&		timer2rxApp_notification,
+					stream<appNotification>&		txApp2rxApp_notification,
 					stream<ap_uint<16> >&			appRxDataRspMetadata,
 					stream<rxSarAppd>&				rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
@@ -428,7 +429,11 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 
 		 	 	appListenPortRsp, rxApp2portTable_listen_req);
 
-	stream_merger(rxEng2rxApp_notification, timer2rxApp_notification, appNotification);
+	static stream<struct appNotification>	rxApp_timerNotification("rxApp_timerNotification");
+	#pragma HLS stream variable=rxApp_timerNotification	depth=4
+	#pragma HLS aggregate variable=rxApp_timerNotification compact=bit
+	stream_merger(txApp2rxApp_notification, timer2rxApp_notification, rxApp_timerNotification);
+	stream_merger(rxApp_timerNotification, rxEng2rxApp_notification, appNotification);
 }
 
 /** @defgroup tcp_module TCP Module
@@ -642,6 +647,10 @@ V80_RX_DEBUG_ARGS
 	// Timer Session release Fifos
 	static stream<ap_uint<16> >					timer2stateTable_releaseState("timer2stateTable_releaseState");
 	#pragma HLS stream variable=timer2stateTable_releaseState			depth=2
+	static stream<ap_uint<16> >					closeTimer2txApp_release("closeTimer2txApp_release");
+	static stream<ap_uint<16> >					txApp2timer_release("txApp2timer_release");
+	#pragma HLS stream variable=closeTimer2txApp_release			depth=1024
+	#pragma HLS stream variable=txApp2timer_release				depth=2
 
 	// Event Engine
 	static stream<extendedEvent>			rxEng2eventEng_setEvent("rxEng2eventEng_setEvent");
@@ -676,6 +685,9 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS aggregate variable=rxEng2rxApp_notification compact=bit
 	#pragma HLS aggregate variable=timer2rxApp_notification compact=bit
 	#pragma HLS aggregate variable=timer2txApp_notification compact=bit
+	static stream<appNotification>			txApp2rxApp_notification("txApp2rxApp_notification");
+	#pragma HLS stream variable=txApp2rxApp_notification		depth=16
+	#pragma HLS aggregate variable=txApp2rxApp_notification compact=bit
 
 	// Port Table
 	static stream<ap_uint<16> >				rxEng2portTable_check_req("rxEng2portTable_check_req");
@@ -765,6 +777,8 @@ V80_RX_DEBUG_ARGS
 					rxEng2timer_clearProbeTimer,
 					txEng2timer_setProbeTimer,
 					rxEng2timer_setCloseTimer,
+					txApp2timer_release,
+					closeTimer2txApp_release,
 					timer2stateTable_releaseState,
 					timer2eventEng_setEvent,
 					timer2rxApp_notification,
@@ -848,6 +862,7 @@ V80_RX_DEBUG_ARGS
 			 	 	portTable2rxApp_listen_rsp,
 			 	 	rxEng2rxApp_notification,
 			 	 	timer2rxApp_notification,
+			 	 	txApp2rxApp_notification,
 			 	 	rxDataRspMeta,
 			 	 	rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
@@ -889,6 +904,9 @@ V80_RX_DEBUG_ARGS
 						txApp2stateTable_upd_req,
 						txApp2eventEng_setEvent,
 						timer2txApp_notification,
+						closeTimer2txApp_release,
+						txApp2timer_release,
+						txApp2rxApp_notification,
 						myIpAddress);
 
 }

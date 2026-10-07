@@ -45,7 +45,11 @@ static const ap_uint<32> TIME_10s		= ( 10000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIO
 static const ap_uint<32> TIME_15s		= ( 15000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 static const ap_uint<32> TIME_20s		= ( 20000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 static const ap_uint<32> TIME_30s		= ( 30000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+#ifdef V80_RTO_TEST_US
+static const ap_uint<32> TIME_60s		= (V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+#else
 static const ap_uint<32> TIME_60s		= ( 60000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+#endif
 static const ap_uint<32> TIME_120s		= (120000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
 #ifdef V80_RTO_TEST_US
 static const ap_uint<32> TIME_RTO_BASE	= (V80_RTO_TEST_US* 1.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
@@ -61,7 +65,6 @@ enum eventType {TX, RT, ACK, SYN, SYN_ACK, FIN, RST, ACK_NODELAY};
 /*
  * There is no explicit LISTEN state
  * CLOSE-WAIT state is not used, since the FIN is sent out immediately after we receive a FIN, the application is simply notified
- * FIN_WAIT_2 is also unused
  * LISTEN is merged into CLOSED
  */
 enum sessionState {CLOSED, SYN_SENT, SYN_RECEIVED, ESTABLISHED, FIN_WAIT_1, FIN_WAIT_2, CLOSING, TIME_WAIT, LAST_ACK};
@@ -309,9 +312,10 @@ struct rxTxSarReply
 	ap_uint<16>	recv_window;
 	ap_uint<32>	recover;
 	bool		loss;
+	bool		finSent;
 	rxTxSarReply() {}
-	rxTxSarReply(ap_uint<32> ack, ap_uint<32> next, ap_uint<WINDOW_BITS> cong_win, ap_uint<WINDOW_BITS> sstresh, ap_uint<2> count, bool fastRetransmitted, ap_uint<16> recv_window, ap_uint<32> recover, bool loss)
-			:prevAck(ack), nextByte(next), cong_window(cong_win), slowstart_threshold(sstresh), count(count), fastRetransmitted(fastRetransmitted), recv_window(recv_window), recover(recover), loss(loss) {}
+	rxTxSarReply(ap_uint<32> ack, ap_uint<32> next, ap_uint<WINDOW_BITS> cong_win, ap_uint<WINDOW_BITS> sstresh, ap_uint<2> count, bool fastRetransmitted, ap_uint<16> recv_window, ap_uint<32> recover, bool loss, bool finSent)
+			:prevAck(ack), nextByte(next), cong_window(cong_win), slowstart_threshold(sstresh), count(count), fastRetransmitted(fastRetransmitted), recv_window(recv_window), recover(recover), loss(loss), finSent(finSent) {}
 };
 
 struct txAppTxSarReply

@@ -211,6 +211,9 @@ void tx_app_interface(	stream<appTxMeta>&			appTxDataReqMetadata,
 					stream<stateQuery>&				txApp2stateTable_upd_req,
 					stream<event>&					txApp2eventEng_setEvent,
 					stream<openStatus>&				rtTimer2txApp_notification,
+					stream<ap_uint<16> >&			closeTimer2txApp_release,
+					stream<ap_uint<16> >&			txApp2timer_release,
+					stream<appNotification>&		txApp2rxApp_notification,
 					ap_uint<32>						myIpAddress)
 {
 //#pragma HLS DATAFLOW
@@ -288,6 +291,9 @@ void tx_app_interface(	stream<appTxMeta>&			appTxDataReqMetadata,
 				txApp2stateTable_upd_req,
 				txApp2eventEng_mergeEvent,
 				rtTimer2txApp_notification,
+				closeTimer2txApp_release,
+				txApp2timer_release,
+				txApp2rxApp_notification,
 				myIpAddress);
 
 	// TX App Meta Table
@@ -324,4 +330,7 @@ template void tx_app_interface<DATA_WIDTH>(	stream<appTxMeta>&			appTxDataReqMet
 					stream<stateQuery>&				txApp2stateTable_upd_req,
 					stream<event>&					txApp2eventEng_setEvent,
 					stream<openStatus>&				rtTimer2txApp_notification,
+					stream<ap_uint<16> >&			closeTimer2txApp_release,
+					stream<ap_uint<16> >&			txApp2timer_release,
+					stream<appNotification>&		txApp2rxApp_notification,
 					ap_uint<32>						myIpAddress);

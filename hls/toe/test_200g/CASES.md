@@ -59,6 +59,12 @@ C-sim PASS를 요구하고, RTL/TB fingerprint가 같을 때만 elaboration을 �
 | `active_open` | 애플리케이션 open → SYN/SYN-ACK → open status, RX/TX |
 | `close` | local FIN 후 peer FIN+payload, payload 보존과 FIN sequence byte ACK |
 | `closed_port` | 닫힌 포트 SYN의 RST 응답, 이후 listen/연결/수신 |
+| `syn_exhaust` | MAX_SESSIONS개 연결이 찬 뒤 새 SYN에 RST+ACK(ack = seq + 1) 응답, 세션 수와 기존 세션의 수신 유지(빌드의 MAX_SESSIONS만큼 handshake를 하므로 v80_toe nvmet 변형(256)으로 실행) |
+| `close_notify` | 앱 close 뒤의 피어 FIN 처리: payload 없는 FIN(FIN_WAIT_1/2)에 closed 통지 1회와 ACK, 재전송 FIN은 통지 없음, TIME_WAIT 만료는 통지 없이 해제; FIN+payload, FIN_WAIT에서 RST, TIME_WAIT에서 RST(통지 1-2회, 즉시 해제, 이후 stale close timer 활동 없음), 동시 close(CLOSING→TIME_WAIT, 통지 1회) |
+| `fin_wait2_timeout` | 앱 close 뒤 피어가 ACK만 보내고 FIN을 보내지 않음: FIN_WAIT_2에서 데이터는 전달되고 RST가 없으며 같은 tuple의 SYN은 무시, 55-66 sweep 뒤 세션 해제와 closed 통지 1회, FIN 재전송 없음, 같은 tuple로 재접속 성공 |
+| `fin_wait2_fin` | FIN_WAIT_2에서 30 sweep 뒤 피어 FIN: ACK, closed 통지 1회, TIME_WAIT 타이머가 FIN 시점부터 다시 시작(55-66 sweep 뒤 해제), 해제 통지 없음 |
+| `fin_rto_exhaust` | 앱 close 뒤 피어 무응답: 같은 sequence의 FIN 7회(RTO 16/32/60/60/60/60 sweep), 340-360 sweep 뒤 해제와 closed 통지 1회, 이후 활동 없음 |
+| `fin_wait2_rst_reuse` | MAX_SESSIONS개 연결이 찬 뒤 세션 0을 close(ACK → FIN_WAIT_2)하고 RST로 해제, 새 포트의 SYN이 같은 세션 ID를 재사용: FIN_WAIT_2에 걸린 close timer가 만료돼도(tA+66 sweep) 새 세션이 유지되고 통지가 없음 (빌드의 MAX_SESSIONS만큼 handshake) |
 | `multisession` | 8개 tuple과 실제 session ID의 매칭, 혼합 RX/TX |
 | `backpressure` | active open, RX/TX, fast retransmit의 전체 인터페이스 stall |
 | `timers` | retransmit_timer 컴포넌트: C-sim 단축 상수(16/32/60 sweep)로 지수 backoff, 활성 타이머의 set 무시, 진전 ACK 재시작과 collapse, 6회 재전송 뒤 해제, 연속 사이클 set/stop forwarding. 실제 timeout 시간 인증 아님 |
