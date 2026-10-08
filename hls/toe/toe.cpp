@@ -664,12 +664,20 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS stream variable=txApp2eventEng_setEvent			depth=64
 	#pragma HLS stream variable=timer2eventEng_setEvent			depth=64 //TODO maybe reduce to 2, there should be no evil cycle
 	#pragma HLS stream variable=eventEng2ackDelay_event				depth=64
-	#pragma HLS stream variable=eventEng2txEng_event				depth=64
+	#pragma HLS stream variable=eventEng2txEng_event				depth=4
 	#pragma HLS aggregate variable=rxEng2eventEng_setEvent compact=bit
 	#pragma HLS aggregate variable=txApp2eventEng_setEvent compact=bit
 	#pragma HLS aggregate variable=timer2eventEng_setEvent compact=bit
 	#pragma HLS aggregate variable=eventEng2ackDelay_event compact=bit
 	#pragma HLS aggregate variable=eventEng2txEng_event compact=bit
+	static stream<ackRequest>				rxEng2ackSched_req("rxEng2ackSched_req");
+	static stream<ap_uint<16> >				ackSched2ackDelay_ack("ackSched2ackDelay_ack");
+	static stream<ackClear>					ackDelay2ackSched_clear("ackDelay2ackSched_clear");
+	#pragma HLS stream variable=rxEng2ackSched_req				depth=8
+	#pragma HLS stream variable=ackSched2ackDelay_ack			depth=4
+	#pragma HLS stream variable=ackDelay2ackSched_clear			depth=8
+	#pragma HLS aggregate variable=rxEng2ackSched_req compact=bit
+	#pragma HLS aggregate variable=ackDelay2ackSched_clear compact=bit
 
 	// Application Interface
 	static stream<openStatus>				conEstablishedFifo("conEstablishedFifo");
@@ -792,7 +800,8 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS stream variable=txEngFifoReadCount		depth=64
 	event_engine(txApp2eventEng_setEvent, rxEng2eventEng_setEvent, timer2eventEng_setEvent, eventEng2ackDelay_event,
 					ackDelayFifoReadCount, ackDelayFifoWriteCount, txEngFifoReadCount);
-	ack_delay(eventEng2ackDelay_event, eventEng2txEng_event, ackDelayFifoReadCount, ackDelayFifoWriteCount);
+	ack_scheduler(rxEng2ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack);
+	ack_delay(eventEng2ackDelay_event, ackSched2ackDelay_ack, eventEng2txEng_event, ackDelay2ackSched_clear, ackDelayFifoReadCount, ackDelayFifoWriteCount);
 
 	/*
 	 * Engines
@@ -820,6 +829,7 @@ V80_RX_DEBUG_ARGS
 				rxEng2timer_setCloseTimer,
 				conEstablishedFifo, //remove this
 				rxEng2eventEng_setEvent,
+				rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				rxBufferWriteCmd,
 				rxEng2rxApp_notification

@@ -1080,6 +1080,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						stream<ap_uint<16> >&					rxEng2timer_setCloseTimer,
 						stream<openStatus>&						openConStatusOut,
 						stream<event>&							rxEng2eventEng_setEvent,
+						stream<ackRequest>&						rxEng2ackSched_req,
 						stream<bool>&							dropDataFifoOut,
 #if !(RX_DDR_BYPASS)
 						stream<mmCmd>&							rxBufferWriteCmd,
@@ -1492,12 +1493,12 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						if ((fsm_meta.meta.seqNumb == rxSar.recvd) && ((rxbuffer_max_data_count - rxbuffer_data_count) > 375))
 #endif
 						{
-							rxEng2eventEng_setEvent.write(event(ACK, fsm_meta.sessionID));
+							rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, false));
 						}
 						//send duplicate ack with ack_nodelay
 						else 
 						{
-							rxEng2eventEng_setEvent.write(event(ACK_NODELAY, fsm_meta.sessionID));	
+							rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, true));
 						}
 						
 					}
@@ -1614,7 +1615,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				else // Any synchronized state
 				{
 					// Unexpected SYN arrived, reply with normal ACK, RFC 793: fig.10
-					rxEng2eventEng_setEvent.write(event(ACK_NODELAY, fsm_meta.sessionID));
+					rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, true));
 					// TODo send RST, has no ACK??
 					// Respond with RST, no ACK, seq ==
 					//eventEngine.write(rstEvent(mh_meta.seqNumb, mh_meta.length, true));
@@ -1654,7 +1655,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, 0, false))); //TODO maybe include count check
 #endif
 					// set ACK event
-					rxEng2eventEng_setEvent.write(event(ACK_NODELAY, fsm_meta.sessionID));
+					rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, true));
 
 					rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, ESTABLISHED, 1));
 					openConStatusOut.write(openStatus(fsm_meta.sessionID, 1, fsm_meta.srcIpAddress, fsm_meta.srcIpPort));
@@ -1668,7 +1669,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				else
 				{
 					// Unexpected SYN arrived, reply with normal ACK, RFC 793: fig.10
-					rxEng2eventEng_setEvent.write(event(ACK_NODELAY, fsm_meta.sessionID));
+					rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, true));
 					rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, tcpState, 1));
 				}
 			}
@@ -1741,12 +1742,12 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						{
 							rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, CLOSING, 1));
 						}
-						rxEng2eventEng_setEvent.write(event(ACK, fsm_meta.sessionID));
+						rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, false));
 					}
 				}
 				else // NOT (ESTABLISHED || FIN_WAIT_1 || FIN_WAIT_2)
 				{
-					rxEng2eventEng_setEvent.write(event(ACK, fsm_meta.sessionID));
+					rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, false));
 					rxEng2stateTable_upd_req.write(stateQuery(fsm_meta.sessionID, tcpState, 1));
 					// If there is payload we need to drop it
 					if (fsm_meta.meta.length != 0)
@@ -2184,6 +2185,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,
 				stream<openStatus>&					openConStatusOut,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
+				stream<ackRequest>&					rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
 				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS)
@@ -2370,6 +2372,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 							rxEng2timer_setCloseTimer,
 							openConStatusOut,
 							rxEng_fsmEventFifo,
+							rxEng2ackSched_req,
 							rxEng_fsmDropFifo,
 #if !(RX_DDR_BYPASS)
 							rxTcpFsm2wrAccessBreakdown,
@@ -2421,6 +2424,7 @@ template void rx_engine<DATA_WIDTH>(	stream<net_axis<DATA_WIDTH> >&					ipRxData
 				stream<ap_uint<16> >&				rxEng2timer_setCloseTimer,
 				stream<openStatus>&					openConStatusOut,
 				stream<extendedEvent>&				rxEng2eventEng_setEvent,
+				stream<ackRequest>&					rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
 				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS);

@@ -30,7 +30,16 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.// Copyright (c) 2015 Xilinx, 
 
 using namespace hls;
 
+static const unsigned AD_FORWARD_DEPTH = 4;
+static const ap_uint<8> AD_TIME = (TIME_64us > 255) ? ap_uint<32>(255) : TIME_64us;
+
+void ack_scheduler(	stream<ackRequest>&		requestIn,
+					stream<ackClear>&		clearIn,
+					stream<ap_uint<16> >&	ackOut);
+
 void ack_delay(	stream<extendedEvent>&	input,
+				stream<ap_uint<16> >&	ackIn,
 				stream<extendedEvent>&	output,
+				stream<ackClear>&		clearOut,
 				stream<ap_uint<1> >&	readCountFifo,
 				stream<ap_uint<1> >&	writeCountFifo);

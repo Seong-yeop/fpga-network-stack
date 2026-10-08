@@ -466,6 +466,30 @@ struct extendedEvent : public event
 			:event(ev.type, ev.sessionID, ev.address, ev.length, ev.rt_count), tuple(tuple) {}
 };
 
+struct ackRequest
+{
+	ap_uint<16>	sessionID;
+	bool		nodelay;
+	ackRequest() {}
+	ackRequest(ap_uint<16> id, bool nodelay)
+			:sessionID(id), nodelay(nodelay) {}
+};
+
+struct ackClear
+{
+	ap_uint<16>	sessionID;
+	bool		all;
+	ackClear() {}
+	ackClear(ap_uint<16> id, bool all)
+			:sessionID(id), all(all) {}
+};
+
+struct ackEntry
+{
+	ap_uint<8>	time;
+	ap_uint<2>	pend;
+};
+
 struct rstEvent : public event
 {
 	rstEvent() {}
