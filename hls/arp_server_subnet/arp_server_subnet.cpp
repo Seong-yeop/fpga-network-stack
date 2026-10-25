@@ -93,6 +93,7 @@ void generate_arp_pkg(	hls::stream<arpReplyMeta>&     arpReplyMetaFifo,
 	{
 	case IDLE:
 		header.clear();
+		header.setFixedFields();
 		if (!arpReplyMetaFifo.empty())
 		{
 			arpReplyMetaFifo.read(replyMeta);

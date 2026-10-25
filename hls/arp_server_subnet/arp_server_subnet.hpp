@@ -88,6 +88,10 @@ class arpHeader : public packetHeader<W, ARP_HEADER_SIZE> {
 public:
 	arpHeader()
 	{
+		setFixedFields();
+	}
+	void setFixedFields()
+	{
 		header(111,96) = 0x0608; // Ethernet type
 		header(127,112) = 0x0100; //Hardware type
 		header(143, 128) = 0x0008; //Protocol type
