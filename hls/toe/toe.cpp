@@ -678,6 +678,14 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS stream variable=ackDelay2ackSched_clear			depth=8
 	#pragma HLS aggregate variable=rxEng2ackSched_req compact=bit
 	#pragma HLS aggregate variable=ackDelay2ackSched_clear compact=bit
+#ifdef V80_RX_MEM_NO_SPLIT
+	static stream<ackRequest>				rxSar2ackSched_req("rxSar2ackSched_req");
+	static stream<ackRequest>				ackSched_req("ackSched_req");
+	#pragma HLS stream variable=rxSar2ackSched_req				depth=8
+	#pragma HLS stream variable=ackSched_req					depth=8
+	#pragma HLS aggregate variable=rxSar2ackSched_req compact=bit
+	#pragma HLS aggregate variable=ackSched_req compact=bit
+#endif
 
 	// Application Interface
 	static stream<openStatus>				conEstablishedFifo("conEstablishedFifo");
@@ -753,6 +761,7 @@ V80_RX_DEBUG_ARGS
 					rxSar2txEng_rsp
 #ifdef V80_RX_MEM_NO_SPLIT
 					,rxApp2rxSar_release
+					,rxSar2ackSched_req
 #endif
 #if (RX_DDR_BYPASS)
 					,axis_data_count
@@ -800,7 +809,12 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS stream variable=txEngFifoReadCount		depth=64
 	event_engine(txApp2eventEng_setEvent, rxEng2eventEng_setEvent, timer2eventEng_setEvent, eventEng2ackDelay_event,
 					ackDelayFifoReadCount, ackDelayFifoWriteCount, txEngFifoReadCount);
+#ifdef V80_RX_MEM_NO_SPLIT
+	stream_merger(rxEng2ackSched_req, rxSar2ackSched_req, ackSched_req);
+	ack_scheduler(ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack);
+#else
 	ack_scheduler(rxEng2ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack);
+#endif
 	ack_delay(eventEng2ackDelay_event, ackSched2ackDelay_ack, eventEng2txEng_event, ackDelay2ackSched_clear, ackDelayFifoReadCount, ackDelayFifoWriteCount);
 
 	/*

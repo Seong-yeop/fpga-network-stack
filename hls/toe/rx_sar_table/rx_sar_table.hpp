@@ -41,6 +41,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<rxSarReply>&			rxSar2txEng_rsp
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
+					,stream<ackRequest>&		rxSar2ackSched_req
 #endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count

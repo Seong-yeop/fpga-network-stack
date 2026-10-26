@@ -48,6 +48,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<rxSarReply>&			rxSar2txEng_rsp
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
+					,stream<ackRequest>&		rxSar2ackSched_req
 #endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
@@ -63,6 +64,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #pragma HLS bind_storage variable=rx_table type=RAM_1P impl=BRAM
 #pragma HLS DEPENDENCE variable=rx_table inter false
+#ifdef V80_RX_MEM_NO_SPLIT
+	static ap_uint<WINDOW_BITS> rx_adv_edge[MAX_SESSIONS];
+#pragma HLS bind_storage variable=rx_adv_edge type=RAM_1P impl=BRAM
+#pragma HLS DEPENDENCE variable=rx_adv_edge inter false
+#endif
 
 	// Read only access from the Tx Engine
 	if(!txEng2rxSar_req.empty())
@@ -132,9 +138,15 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #if (WINDOW_SCALE)
 				ap_uint<WINDOW_BITS> actualWindowSize = (entry.appd - ((ap_uint<WINDOW_BITS>)entry.recvd)) - 1; // This works even for wrap around
 				reply.windowSize = actualWindowSize >> entry.win_shift;
+#ifdef V80_RX_MEM_NO_SPLIT
+				rx_adv_edge[addr] = (ap_uint<WINDOW_BITS>)entry.recvd + (((ap_uint<WINDOW_BITS>)reply.windowSize) << entry.win_shift);
+#endif
 #else
 				//This works even for wrap around
 				reply.windowSize = (entry.appd - ((ap_uint<16>)entry.recvd)) - 1; // This works even for wrap around
+#ifdef V80_RX_MEM_NO_SPLIT
+				rx_adv_edge[addr] = (ap_uint<WINDOW_BITS>)entry.recvd + (ap_uint<WINDOW_BITS>)reply.windowSize;
+#endif
 #endif
 
 #endif // RX_DDR_BYPASS
@@ -170,6 +182,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 				rx_table[in_recvd.sessionID].appd = in_recvd.recvd;
 #ifdef V80_RX_MEM_NO_SPLIT
 				rx_table[in_recvd.sessionID].released = in_recvd.recvd;
+				rx_adv_edge[in_recvd.sessionID] = (ap_uint<WINDOW_BITS>)in_recvd.recvd - 1;
 #endif
 #if (WINDOW_SCALE)
 				rx_table[in_recvd.sessionID].win_shift = in_recvd.win_shift;
@@ -185,7 +198,14 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 	else if(!rxApp2rxSar_release.empty())
 	{
 		rxSarAppd rel = rxApp2rxSar_release.read();
+		ap_uint<WINDOW_BITS> recvd = (ap_uint<WINDOW_BITS>)rx_table[rel.sessionID].recvd;
+		ap_uint<WINDOW_BITS> advertised = rx_adv_edge[rel.sessionID] - recvd;
+		ap_uint<WINDOW_BITS> opened = rel.appd - recvd - 1;
 		rx_table[rel.sessionID].released = rel.appd;
+		if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
+		{
+			rxSar2ackSched_req.write_nb(ackRequest(rel.sessionID, true));
+		}
 	}
 #endif
 }
