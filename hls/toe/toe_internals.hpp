@@ -29,31 +29,31 @@ static const ap_uint<32> TIME_120s		= 120;
 static const ap_uint<32> TIME_RTO_BASE	= 16;
 static const ap_uint<32> TIME_RTO_MAX	= 60;
 #else
-static const ap_uint<32> TIME_64us		= (       64.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_128us		= (      128.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_1ms		= (     1000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_5ms		= (     5000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_25ms		= (    25000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_50ms		= (    50000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_100ms		= (   100000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_250ms		= (   250000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_500ms		= (   500000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_1s		= (  1000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_5s		= (  5000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_7s		= (  7000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_10s		= ( 10000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_15s		= ( 15000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_20s		= ( 20000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_30s		= ( 30000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+static const ap_uint<32> TIME_64us		= (unsigned long long)((       64.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_128us		= (unsigned long long)((      128.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_1ms		= (unsigned long long)((     1000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_5ms		= (unsigned long long)((     5000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_25ms		= (unsigned long long)((    25000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_50ms		= (unsigned long long)((    50000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_100ms		= (unsigned long long)((   100000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_250ms		= (unsigned long long)((   250000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_500ms		= (unsigned long long)((   500000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_1s		= (unsigned long long)((  1000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_5s		= (unsigned long long)((  5000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_7s		= (unsigned long long)((  7000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_10s		= (unsigned long long)(( 10000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_15s		= (unsigned long long)(( 15000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_20s		= (unsigned long long)(( 20000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_30s		= (unsigned long long)(( 30000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #ifdef V80_RTO_TEST_US
-static const ap_uint<32> TIME_60s		= (V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+static const ap_uint<32> TIME_60s		= (unsigned long long)((V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #else
-static const ap_uint<32> TIME_60s		= ( 60000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+static const ap_uint<32> TIME_60s		= (unsigned long long)(( 60000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #endif
-static const ap_uint<32> TIME_120s		= (120000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+static const ap_uint<32> TIME_120s		= (unsigned long long)((120000000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #ifdef V80_RTO_TEST_US
-static const ap_uint<32> TIME_RTO_BASE	= (V80_RTO_TEST_US* 1.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
-static const ap_uint<32> TIME_RTO_MAX	= (V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1;
+static const ap_uint<32> TIME_RTO_BASE	= (unsigned long long)((V80_RTO_TEST_US* 1.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
+static const ap_uint<32> TIME_RTO_MAX	= (unsigned long long)((V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #else
 static const ap_uint<32> TIME_RTO_BASE	= TIME_1s;
 static const ap_uint<32> TIME_RTO_MAX	= TIME_60s;
