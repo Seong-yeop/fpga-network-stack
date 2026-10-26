@@ -1502,6 +1502,12 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						}
 						
 					}
+#ifdef V80_RX_MEM_NO_SPLIT
+					else if ((ap_int<32>)(fsm_meta.meta.seqNumb - rxSar.recvd) < 0)
+					{
+						rxEng2ackSched_req.write(ackRequest(fsm_meta.sessionID, true));
+					}
+#endif
 
 
 					// Reset Retransmit Timer
