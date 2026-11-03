@@ -69,6 +69,12 @@ struct twoTuple
 				:srcIp(srcIp), dstIp(dstIp) {}
 };
 
+#ifdef V80_RUNTIME_MSS
+typedef ap_uint<17 - DATA_KEEP_BITS> txEngBypass;
+#else
+typedef bool txEngBypass;
+#endif
+
 /** @defgroup tx_engine TX Engine
  *  @ingroup tcp_module
  *  @image html tx_engine.png

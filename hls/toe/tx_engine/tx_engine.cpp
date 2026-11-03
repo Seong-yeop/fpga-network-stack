@@ -67,7 +67,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				hls::stream<ap_uint<16> >&				txEng2sLookup_rev_req,
 				hls::stream<bool>&						txEng_isLookUpFifoOut,
 #if (TCP_NODELAY)
-				hls::stream<bool>&						txEng_isDDRbypass,
+				hls::stream<txEngBypass>&				txEng_isDDRbypass,
 #endif
 				hls::stream<fourTuple>&					txEng_tupleShortCutFifoOut,
 				hls::stream<ap_uint<1> >&				readCountFifo
@@ -84,7 +84,11 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
 
+#if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
+	static ap_uint<2> ml_FsmState = 0;
+#else
 	static ap_uint<1> ml_FsmState = 0;
+#endif
 	static bool ml_retryDelay = false;
 	static bool ml_sarLoaded = false;
 	static extendedEvent ml_curEvent;
@@ -92,9 +96,26 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 
 	static rxSarReply	rxSar;
 	static txTxSarReply	txSarReg;
+#if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
+	static ap_uint<16> ml_txLeft = 0;
+	static ap_uint<32> ml_txSeq = 0;
+	static ap_uint<16> ml_txStep = DATA_WIDTH/8;
+	static ap_uint<32> ml_txAck = 0;
+	static ap_uint<16> ml_txWin = 0;
+#endif
 	ap_uint<WINDOW_BITS> slowstart_threshold;
 	static tx_engine_meta meta;
 	rstEvent resetEvent;
+
+#if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
+	ap_uint<16> txStep = ml_txStep;
+	ml_txStep = segmentMss;
+	ml_txStep(DATA_KEEP_BITS-1, 0) = 0;
+	if (segmentMss < (DATA_WIDTH/8))
+	{
+		ml_txStep = DATA_WIDTH/8;
+	}
+#endif
 
 	// Leave a query-free cycle so the SAR table can consume write completions.
 	if (ml_retryDelay) { ml_retryDelay = false; return; }
@@ -162,6 +183,10 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 		// Can bypass DDR
 #if (TCP_NODELAY)
 		case TX:
+		{
+#ifdef V80_RUNTIME_MSS
+			txEngBypass txStepMarker = (txStep(15, DATA_KEEP_BITS), ap_uint<1>(1));
+#endif
 			if ((!rxSar2txEng_rsp.empty() && !txSar2txEng_upd_rsp.empty()))// || ml_sarLoaded)
 			{
 				rxSar2txEng_rsp.read(rxSar);
@@ -175,6 +200,17 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				meta.syn = 0;
 				meta.fin = 0;
 				meta.length = ml_curEvent.length;
+#ifdef V80_RUNTIME_MSS
+				bool txSplit = ml_curEvent.length > segmentMss && ml_curEvent.length > txStep;
+				if (txSplit)
+				{
+					meta.length = txStep;
+					ml_txLeft = ml_curEvent.length - txStep;
+					ml_txSeq = txSar.not_ackd;
+					ml_txAck = rxSar.recvd;
+					ml_txWin = rxSar.windowSize;
+				}
+#endif
 
 				//this is hack, makes sure that probeTimer is never set.
 				//ProbeTimer is not used, since application checks space before transmitting
@@ -189,6 +225,12 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				txEng2txSar_upd_req.write(txTxSarQuery(ml_curEvent.sessionID, txSar.not_ackd, 1));
 				//This state is always left
 				ml_FsmState = 0;
+#ifdef V80_RUNTIME_MSS
+				if (txSplit)
+				{
+					ml_FsmState = 2;
+				}
+#endif
 
 
 				// Send a packet only if there is data or we want to send an empty probing message
@@ -197,6 +239,13 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					txEng_ipMetaFifoOut.write(meta.length);
 					txEng_tcpMetaFifoOut.write(meta);
 					txEng_isLookUpFifoOut.write(true);
+#ifdef V80_RUNTIME_MSS
+					if (txSplit)
+					{
+						txEng_isDDRbypass.write(txStepMarker);
+					}
+					else
+#endif
 					txEng_isDDRbypass.write(true);
 					txEng2sLookup_rev_req.write(ml_curEvent.sessionID);
 
@@ -217,6 +266,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 			}
 
 			break;
+		}
 #else
 		case TX:
 			// Sends everyting between txSar.not_ackd and txSar.app
@@ -711,6 +761,35 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 			break;
 		} //switch
 		break;
+#if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
+	case 2:
+	{
+		txEngBypass txStepMarker = (txStep(15, DATA_KEEP_BITS), ap_uint<1>(1));
+		ml_txSeq += txStep;
+		tx_engine_meta segMeta(ml_txSeq, ml_txAck, 1, 0, 0, 0);
+		segMeta.window_size = ml_txWin;
+#if (WINDOW_SCALE)
+		segMeta.win_shift = 0;
+#endif
+		if (ml_txLeft > txStep)
+		{
+			segMeta.length = txStep;
+			txEng_isDDRbypass.write(txStepMarker);
+			ml_txLeft -= txStep;
+		}
+		else
+		{
+			segMeta.length = ml_txLeft;
+			txEng_isDDRbypass.write(true);
+			ml_FsmState = 0;
+		}
+		txEng_ipMetaFifoOut.write(segMeta.length);
+		txEng_tcpMetaFifoOut.write(segMeta);
+		txEng_isLookUpFifoOut.write(true);
+		txEng2sLookup_rev_req.write(ml_curEvent.sessionID);
+		break;
+	}
+#endif
 	} //switch
 }
 
@@ -1496,7 +1575,7 @@ void read_data_stitching(	hls::stream<bool>&			memAccessBreakdown2readPkgStitche
 template <int WIDTH>
 void read_data_arbiter(stream<net_axis<WIDTH> >&		txBufferReadData,
 #if (TCP_NODELAY)
-					stream<bool>&			txEng_isDDRbypass,
+					stream<txEngBypass>&			txEng_isDDRbypass,
 					stream<net_axis<WIDTH> >&		txApp2txEng_data_stream,
 #endif
 					stream<net_axis<WIDTH> >&		txEng_tcpSegOut)
@@ -1505,6 +1584,9 @@ void read_data_arbiter(stream<net_axis<WIDTH> >&		txBufferReadData,
 	#pragma HLS INLINE off
 
 	static ap_uint<2>	tps_state = 0; //TODO rename
+#if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
+	static ap_uint<16 - DATA_KEEP_BITS>	tps_words = 0;
+#endif
 
 	switch (tps_state)
 	{
@@ -1512,7 +1594,13 @@ void read_data_arbiter(stream<net_axis<WIDTH> >&		txBufferReadData,
 #if (TCP_NODELAY)
 		if (!txEng_isDDRbypass.empty())
 		{
+#ifdef V80_RUNTIME_MSS
+			txEngBypass marker = txEng_isDDRbypass.read();
+			bool isBypass = marker[0];
+			tps_words = marker(16 - DATA_KEEP_BITS, 1);
+#else
 			bool isBypass = txEng_isDDRbypass.read();
+#endif
 			if (isBypass)
 			{
 				tps_state = 2;
@@ -1546,6 +1634,17 @@ void read_data_arbiter(stream<net_axis<WIDTH> >&		txBufferReadData,
 			// std::cout << "ARBITER: ";
 			// printLE(std::cout, currWord);
 			// std::cout << std::endl;
+#ifdef V80_RUNTIME_MSS
+			if (tps_words == 1)
+			{
+				currWord.keep = ~ap_uint<WIDTH/8>(0);
+				currWord.last = 1;
+			}
+			if (tps_words != 0)
+			{
+				tps_words--;
+			}
+#endif
 			txEng_tcpSegOut.write(currWord);
 			if (currWord.last)
 			{
@@ -1808,7 +1907,7 @@ void tx_engine(	stream<extendedEvent>&			eventEng2txEng_event,
 	static stream<bool> memAccessBreakdown2txPkgStitcher("memAccessBreakdown2txPkgStitcher");
 	#pragma HLS stream variable=memAccessBreakdown2txPkgStitcher depth=32
 	
-	static stream<bool> txEng_isDDRbypass("txEng_isDDRbypass");
+	static stream<txEngBypass> txEng_isDDRbypass("txEng_isDDRbypass");
 	#pragma HLS stream variable=txEng_isDDRbypass depth=32
 
 
