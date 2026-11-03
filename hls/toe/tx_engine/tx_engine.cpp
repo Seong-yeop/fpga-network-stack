@@ -939,6 +939,7 @@ void generate_ipv4( //stream<ipv4Meta>&    txEng_ipMetaDataFifoIn,
       header.setDstAddr(tuples.dstIp);
       header.setSrcAddr(tuples.srcIp);
       header.setProtocol(TCP_PROTOCOL);
+      header.setFlags(1);
       if (IPV4_HEADER_SIZE >= WIDTH)
       {
 		// std::cout << "switched to IP HEADER" << std::endl;
