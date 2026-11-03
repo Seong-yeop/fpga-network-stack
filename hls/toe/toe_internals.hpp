@@ -55,7 +55,7 @@ static const ap_uint<32> TIME_120s		= (unsigned long long)((120000000.0/TOE_CLOC
 static const ap_uint<32> TIME_RTO_BASE	= (unsigned long long)((V80_RTO_TEST_US* 1.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 static const ap_uint<32> TIME_RTO_MAX	= (unsigned long long)((V80_RTO_TEST_US*60.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 #else
-static const ap_uint<32> TIME_RTO_BASE	= TIME_1s;
+static const ap_uint<32> TIME_RTO_BASE	= (unsigned long long)((   200000.0/TOE_CLOCK_PERIOD_US/MAX_SESSIONS) + 1);
 static const ap_uint<32> TIME_RTO_MAX	= TIME_60s;
 #endif
 #endif
