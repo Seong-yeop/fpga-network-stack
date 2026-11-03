@@ -105,12 +105,15 @@ void lookupReplyHandler(stream<rtlSessionLookupReply>&			sessionLookup_rsp,
 	ap_uint<16> sessionID;
 	ap_uint<14> freeID = 0;
 
-	enum slcFsmStateType {LUP_REQ, LUP_RSP, UPD_RSP};
-	static slcFsmStateType slc_fsmState = LUP_REQ;
+	enum slcFsmStateType {LUP_RSP, UPD_RSP};
+	static slcFsmStateType slc_fsmState = LUP_RSP;
+	static ap_uint<2> slc_inflight = 0;
+	static bool slc_createPending = false;
 
-	switch (slc_fsmState)
+	bool issued = false;
+	bool answered = false;
+	if (!slc_createPending && slc_inflight < 2)
 	{
-	case LUP_REQ:
 		if (!txApp2sLookup_req.empty())
 		{
 			txApp2sLookup_req.read(toeTuple);
@@ -122,7 +125,8 @@ void lookupReplyHandler(stream<rtlSessionLookupReply>&			sessionLookup_rsp,
 			intQuery.source = TX_APP;
 			sessionLookup_req.write(rtlSessionLookupRequest(intQuery.tuple, intQuery.source));
 			slc_queryCache.write(intQuery);
-			slc_fsmState = LUP_RSP;
+			slc_createPending = true;
+			issued = true;
 		}
 		else if (!rxEng2sLooup_req.empty())
 		{
@@ -135,14 +139,19 @@ void lookupReplyHandler(stream<rtlSessionLookupReply>&			sessionLookup_rsp,
 			intQuery.source = RX;
 			sessionLookup_req.write(rtlSessionLookupRequest(intQuery.tuple, intQuery.source));
 			slc_queryCache.write(intQuery);
-			slc_fsmState = LUP_RSP;
+			slc_createPending = query.allowCreation;
+			issued = true;
 		}
-		break;
+	}
+
+	switch (slc_fsmState)
+	{
 	case LUP_RSP:
 		if(!sessionLookup_rsp.empty() && !slc_queryCache.empty())
 		{
 			sessionLookup_rsp.read(lupReply);
 			slc_queryCache.read(intQuery);
+			answered = true;
 			if (!lupReply.hit && intQuery.allowCreation && !sessionIdFreeList.empty())
 			{
 				sessionIdFreeList.read(freeID);
@@ -160,7 +169,10 @@ void lookupReplyHandler(stream<rtlSessionLookupReply>&			sessionLookup_rsp,
 				{
 					sLookup2txApp_rsp.write(sessionLookupReply(lupReply.sessionID, lupReply.hit));
 				}
-				slc_fsmState = LUP_REQ;
+				if (intQuery.allowCreation)
+				{
+					slc_createPending = false;
+				}
 			}
 		}
 		break;
@@ -181,9 +193,18 @@ void lookupReplyHandler(stream<rtlSessionLookupReply>&			sessionLookup_rsp,
 				sLookup2txApp_rsp.write(sessionLookupReply(insertReply.sessionID, true));
 			}
 			reverseTableInsertFifo.write(revLupInsert(insertReply.sessionID, tuple));
-			slc_fsmState = LUP_REQ;
+			slc_createPending = false;
+			slc_fsmState = LUP_RSP;
 		}
 		break;
+	}
+	if (issued && !answered)
+	{
+		slc_inflight++;
+	}
+	else if (!issued && answered)
+	{
+		slc_inflight--;
 	}
 }
 

@@ -187,6 +187,19 @@ void drop_optional_ip_header(	stream<ap_uint<4> >&	process2dropLengthFifo,
 		sendWord.last = 0x1;
 		dataOut.write(sendWord);
 		doh_state = META;
+		if ((WIDTH == 256 || WIDTH == 512 || WIDTH == 1024) && !process2dropLengthFifo.empty() && !process2dropFifo.empty())
+		{
+			process2dropLengthFifo.read(length);
+			if (length == 5)
+			{
+				process2dropFifo.read(prevWord);
+				doh_state = SHIFT_FIVE;
+				if (prevWord.last)
+				{
+					doh_state = LAST_FIVE;
+				}
+			}
+		}
 		break;
 	} //switch
 }

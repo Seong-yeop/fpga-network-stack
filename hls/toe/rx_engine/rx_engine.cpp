@@ -125,6 +125,61 @@ void prependPseudoHeader(	hls::stream<net_axis<WIDTH> >&		headerIn,
 	static fsmState state = HEADER;
 	static net_axis<WIDTH> prevWord;
 	static bool firstPayload = true;
+	static bool pp_haveHeader = false;
+	static net_axis<WIDTH> pp_nextHeader;
+
+	if (WIDTH > 64)
+	{
+		bool haveHeader = pp_haveHeader;
+		if (!haveHeader && !headerIn.empty())
+		{
+			headerIn.read(pp_nextHeader);
+			pp_haveHeader = true;
+		}
+
+		switch (state)
+		{
+		case HEADER:
+			if (haveHeader)
+			{
+				prevWord = pp_nextHeader;
+				prevWord.last = 0;
+				firstPayload = true;
+				pp_haveHeader = false;
+				state = PAYLOAD;
+			}
+			break;
+		case PAYLOAD:
+			if (!packetIn.empty())
+			{
+				net_axis<WIDTH> currWord = packetIn.read();
+
+				net_axis<WIDTH> sendWord = currWord;
+				if (firstPayload)
+				{
+					sendWord.data(95, 0) = prevWord.data(95,0);
+					firstPayload = false;
+				}
+
+				output.write(sendWord);
+
+				if (currWord.last)
+				{
+					state = HEADER;
+					if (haveHeader)
+					{
+						prevWord = pp_nextHeader;
+						prevWord.last = 0;
+						firstPayload = true;
+						pp_haveHeader = false;
+						state = PAYLOAD;
+					}
+				}
+			}
+			break;
+		}
+		return;
+	}
 
 	switch (state)
 	{
@@ -869,6 +924,13 @@ void rxTcpInvalidDropper(stream<net_axis<WIDTH> >&				dataIn,
 
 
 
+struct rxMetaPending
+{
+	rxEngineMetaData	meta;
+	fourTuple			tuple;
+	bool				portOpen;
+};
+
 /** @ingroup rx_engine
  * The module contains 2 state machines nested into each other. The outer state machine
  * loads the metadata and does the session lookup. The inner state machin then evaluates all
@@ -915,76 +977,80 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 	dbgMeta = (dbg_lookup_miss, dbg_port_closed);
 #endif
 
-	static rxEngineMetaData mh_meta;
-	static sessionLookupReply mh_lup;
-	enum mhStateType {META, LOOKUP};
-	static mhStateType mh_state = META;
-	static ap_uint<32> mh_srcIpAddress;
-	static ap_uint<16> mh_dstIpPort;
-	static ap_uint<16> mh_srcIpPort;
-	static fourTuple mh_tuple;
+	static stream<rxMetaPending> mh_pending("mh_pending");
+	#pragma HLS stream variable=mh_pending depth=4
+	#pragma HLS aggregate variable=mh_pending compact=bit
+	static ap_uint<3> mh_inflight = 0;
+	static bool mh_headValid = false;
+	static rxMetaPending mh_head;
 
-	fourTuple tuple;
-	bool portIsOpen;
+	bool issued = false;
+	bool consumed = false;
 
-	switch (mh_state)
+	if (mh_inflight < 4 && !metaDataFifoIn.empty() && !portTable2rxEng_rsp.empty() && !tupleBufferIn.empty())
 	{
-	case META:
-		if (!metaDataFifoIn.empty() && !portTable2rxEng_rsp.empty() && !tupleBufferIn.empty())
+		rxMetaPending entry;
+		metaDataFifoIn.read(entry.meta);
+		portTable2rxEng_rsp.read(entry.portOpen);
+		tupleBufferIn.read(entry.tuple);
+		if (entry.portOpen)
 		{
-			metaDataFifoIn.read(mh_meta);
-			portTable2rxEng_rsp.read(portIsOpen);
-			tupleBufferIn.read(tuple);
-			mh_tuple = tuple;
-			mh_srcIpAddress(7, 0) = tuple.srcIp(31, 24);
-			mh_srcIpAddress(15, 8) = tuple.srcIp(23, 16);
-			mh_srcIpAddress(23, 16) = tuple.srcIp(15, 8);
-			mh_srcIpAddress(31, 24) = tuple.srcIp(7, 0);
-			mh_dstIpPort(7, 0) = tuple.dstPort(15, 8);
-			mh_dstIpPort(15, 8) = tuple.dstPort(7, 0);
-			mh_srcIpPort(7,0) = tuple.srcPort(15,8);
-			mh_srcIpPort(15,8) = tuple.srcPort(7,0);
-			// CHeck if port is closed
-			if (!portIsOpen)
-			{
-				// SEND RST+ACK
-				if (!mh_meta.rst)
-				{
-					// send necesssary tuple through event
-					fourTuple switchedTuple;
-					switchedTuple.srcIp = tuple.dstIp;
-					switchedTuple.dstIp = tuple.srcIp;
-					switchedTuple.srcPort = tuple.dstPort;
-					switchedTuple.dstPort = tuple.srcPort;
-					if (mh_meta.syn || mh_meta.fin)
-					{
-						rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length+1), switchedTuple)); //always 0
-					}
-					else
-					{
-						rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length), switchedTuple));
-					}
-				}
-				//else ignore => do nothing
-				if (mh_meta.length != 0)
-				{
-					dropDataFifoOut.write(true);
-#ifdef V80_RX_DEBUG
-					dbg_port_closed++;
-#endif
-				}
-			}
-			else
-			{
-				// Make session lookup, only allow creation of new entry when SYN or SYN_ACK
-				rxEng2sLookup_req.write(sessionLookupQuery(tuple, (mh_meta.syn && !mh_meta.rst && !mh_meta.fin)));
-				mh_state = LOOKUP;
-			}
+			// Make session lookup, only allow creation of new entry when SYN or SYN_ACK
+			rxEng2sLookup_req.write(sessionLookupQuery(entry.tuple, (entry.meta.syn && !entry.meta.rst && !entry.meta.fin)));
 		}
-		break;
-	case LOOKUP: //BIG delay here, waiting for LOOKup
-		if (!sLookup2rxEng_rsp.empty())
+		mh_pending.write(entry);
+		issued = true;
+	}
+
+	if (mh_headValid)
+	{
+		rxEngineMetaData mh_meta = mh_head.meta;
+		fourTuple tuple = mh_head.tuple;
+		ap_uint<32> mh_srcIpAddress;
+		ap_uint<16> mh_dstIpPort;
+		ap_uint<16> mh_srcIpPort;
+		mh_srcIpAddress(7, 0) = tuple.srcIp(31, 24);
+		mh_srcIpAddress(15, 8) = tuple.srcIp(23, 16);
+		mh_srcIpAddress(23, 16) = tuple.srcIp(15, 8);
+		mh_srcIpAddress(31, 24) = tuple.srcIp(7, 0);
+		mh_dstIpPort(7, 0) = tuple.dstPort(15, 8);
+		mh_dstIpPort(15, 8) = tuple.dstPort(7, 0);
+		mh_srcIpPort(7,0) = tuple.srcPort(15,8);
+		mh_srcIpPort(15,8) = tuple.srcPort(7,0);
+		// send necesssary tuple through event
+		fourTuple switchedTuple;
+		switchedTuple.srcIp = tuple.dstIp;
+		switchedTuple.dstIp = tuple.srcIp;
+		switchedTuple.srcPort = tuple.dstPort;
+		switchedTuple.dstPort = tuple.srcPort;
+		// CHeck if port is closed
+		if (!mh_head.portOpen)
 		{
+			// SEND RST+ACK
+			if (!mh_meta.rst)
+			{
+				if (mh_meta.syn || mh_meta.fin)
+				{
+					rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length+1), switchedTuple)); //always 0
+				}
+				else
+				{
+					rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length), switchedTuple));
+				}
+			}
+			//else ignore => do nothing
+			if (mh_meta.length != 0)
+			{
+				dropDataFifoOut.write(true);
+#ifdef V80_RX_DEBUG
+				dbg_port_closed++;
+#endif
+			}
+			consumed = true;
+		}
+		else if (!sLookup2rxEng_rsp.empty()) //BIG delay here, waiting for LOOKup
+		{
+			sessionLookupReply mh_lup;
 			sLookup2rxEng_rsp.read(mh_lup);
 			bool refuse = !mh_lup.hit && mh_meta.syn && !mh_meta.rst;
 			if (mh_lup.hit)
@@ -994,11 +1060,6 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 			}
 			else if (refuse)
 			{
-				fourTuple switchedTuple;
-				switchedTuple.srcIp = mh_tuple.dstIp;
-				switchedTuple.dstIp = mh_tuple.srcIp;
-				switchedTuple.srcPort = mh_tuple.dstPort;
-				switchedTuple.dstPort = mh_tuple.srcPort;
 				rxEng2eventEng_setEvent.write(extendedEvent(rstEvent(mh_meta.seqNumb+mh_meta.length+1), switchedTuple));
 			}
 			if (mh_meta.length != 0)
@@ -1036,11 +1097,28 @@ void rxMetadataHandler(	stream<rxEngineMetaData>&				metaDataFifoIn,
 				// }
 				//mh_state = META;
 			//}*/
-			mh_state = META;
+			consumed = true;
 		}
+	}
 
-		break;
-	}//switch
+	if ((!mh_headValid || consumed) && !mh_pending.empty())
+	{
+		mh_pending.read(mh_head);
+		mh_headValid = true;
+	}
+	else if (consumed)
+	{
+		mh_headValid = false;
+	}
+
+	if (issued && !consumed)
+	{
+		mh_inflight++;
+	}
+	else if (!issued && consumed)
+	{
+		mh_inflight--;
+	}
 }
 
 struct ackTest
@@ -1841,62 +1919,65 @@ void rxPackageDropper(stream<net_axis<WIDTH> >&		dataIn,
 #pragma HLS INLINE off
 #pragma HLS pipeline II=1
 
-	enum tpfStateType {READ_DROP1, READ_DROP2, FWD, DROP};
-	static tpfStateType tpf_state = READ_DROP1;
+	static bool tpf_haveDrop1 = false;
+	static bool tpf_drop1 = false;
+	static bool tpf_haveDrop2 = false;
+	static bool tpf_drop2 = false;
+	static bool tpf_busy = false;
+	static bool tpf_dropping = false;
 
-	bool drop;
+	bool have1 = tpf_haveDrop1;
+	bool have2 = tpf_haveDrop2;
+	bool decided = have1 && (tpf_drop1 || have2);
+	bool drop = tpf_drop1 || (have2 && tpf_drop2);
 
-	switch (tpf_state) {
-	case READ_DROP1: //Drop1
+	if (!have1) //Drop1
+	{
 		if (!dropFifoIn1.empty())
 		{
-			dropFifoIn1.read(drop);
-			if (drop)
-			{
-				tpf_state = DROP;
-			}
-			else
-			{
-				tpf_state = READ_DROP2;
-			}
+			dropFifoIn1.read(tpf_drop1);
+			tpf_haveDrop1 = true;
 		}
-		break;
-	case READ_DROP2:
+	}
+	else if (!tpf_drop1 && !have2)
+	{
 		if (!dropFifoIn2.empty())
 		{
-			dropFifoIn2.read(drop);
-			if (drop)
-			{
-				tpf_state = DROP;
-			}
-			else
-			{
-				tpf_state = FWD;
-			}
+			dropFifoIn2.read(tpf_drop2);
+			tpf_haveDrop2 = true;
 		}
-		break;
-	case FWD:
-		if(!dataIn.empty())
-  		{
+	}
+
+	if (tpf_busy)
+	{
+		if (!dataIn.empty())
+		{
 			net_axis<WIDTH> currWord = dataIn.read();
+			if (!tpf_dropping)
+			{
+				rxBufferDataOut.write(currWord);
+			}
 			if (currWord.last)
 			{
-				tpf_state = READ_DROP1;
+				tpf_busy = false;
 			}
+		}
+	}
+	else if (decided && !dataIn.empty())
+	{
+		net_axis<WIDTH> currWord = dataIn.read();
+		tpf_haveDrop1 = false;
+		tpf_haveDrop2 = false;
+		if (!drop)
+		{
 			rxBufferDataOut.write(currWord);
 		}
-		break;
-	case DROP:
-		if(!dataIn.empty())
- 		{
-			net_axis<WIDTH> currWord = dataIn.read();
-			if (currWord.last)
-			{
-				tpf_state = READ_DROP1;
-			}
+		if (!currWord.last)
+		{
+			tpf_busy = true;
+			tpf_dropping = drop;
 		}
-		break;
-	} // switch
+	}
 }
 
 /** @ingroup rx_engine
@@ -2012,41 +2093,34 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 #pragma HLS pipeline II=1
 #pragma HLS INLINE off
 
-	enum fsmStateType {IDLE, IDLE_REG, CUT_FIRST, ALIGN_SECOND, FWD_ALIGNED, RESIDUE};
+	enum fsmStateType {IDLE, CUT_FIRST, ALIGN_SECOND, FWD_ALIGNED, RESIDUE};
 	static fsmStateType rxMemWrState = IDLE;
 	static mmCmd cmd;
 	static ap_uint<WINDOW_BITS> remainingLength = 0;
 	static ap_uint<WINDOW_BITS> lengthFirstPkg;
 	static ap_uint<8> offset = 0;
 	static net_axis<WIDTH> prevWord;
+	static bool mw_haveNext = false;
+	static mmCmd mw_next;
+	static bool mw_nextSplit = false;
+	static ap_uint<WINDOW_BITS> mw_nextLength = 0;
 
+	bool haveNext = mw_haveNext;
+	bool launch = false;
+	if (!haveNext && !cmdIn.empty())
+	{
+		cmdIn.read(mw_next);
+		mw_nextSplit = (mw_next.saddr(WINDOW_BITS-1, 0) + mw_next.bbt) > BUFFER_SIZE;
+		mw_nextLength = BUFFER_SIZE - mw_next.saddr;
+		mw_haveNext = true;
+	}
 
 	switch (rxMemWrState)
 	{
 	case IDLE:
-		if (!cmdIn.empty())
+		if (haveNext)
 		{
-			cmdIn.read(cmd);
-			rxMemWrState = IDLE_REG;
-		}
-		break;
-	case IDLE_REG:
-		if ((cmd.saddr(WINDOW_BITS-1, 0) + cmd.bbt) > BUFFER_SIZE)
-		{
-			lengthFirstPkg = BUFFER_SIZE - cmd.saddr;
-			remainingLength = lengthFirstPkg;
-			offset = lengthFirstPkg(DATA_KEEP_BITS - 1, 0);
-
-			doubleAccess.write(true);
-			cmdOut.write(mmCmd(cmd.saddr, lengthFirstPkg));
-			rxMemWrState = CUT_FIRST;
-		}
-		else
-		{
-			doubleAccess.write(false);
-
-			cmdOut.write(cmd);
-			rxMemWrState = FWD_ALIGNED;
+			launch = true;
 		}
 		break;
 	case CUT_FIRST:
@@ -2099,6 +2173,7 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 			if (currWord.last)
 			{
 				rxMemWrState = IDLE;
+				launch = haveNext;
 			}
 		}
 		break;
@@ -2118,9 +2193,11 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 			if (currWord.last)
 			{
 				rxMemWrState = IDLE;
+				launch = haveNext;
 				if (!sendWord.last)
 				{
 					rxMemWrState = RESIDUE;
+					launch = false;
 				}
 			}
 
@@ -2137,8 +2214,31 @@ void rxEngMemWrite(	hls::stream<net_axis<WIDTH> >& 	dataIn,
 		sendWord.last = 1;
 		dataOut.write(sendWord);
 		rxMemWrState = IDLE;
+		launch = haveNext;
 		break;
 	} //switch
+
+	if (launch)
+	{
+		cmd = mw_next;
+		mw_haveNext = false;
+		if (mw_nextSplit)
+		{
+			lengthFirstPkg = mw_nextLength;
+			remainingLength = mw_nextLength;
+			offset = mw_nextLength(DATA_KEEP_BITS - 1, 0);
+
+			doubleAccess.write(true);
+			cmdOut.write(mmCmd(mw_next.saddr, mw_nextLength));
+			rxMemWrState = CUT_FIRST;
+		}
+		else
+		{
+			doubleAccess.write(false);
+			cmdOut.write(mw_next);
+			rxMemWrState = FWD_ALIGNED;
+		}
+	}
 }
 
 /** @ingroup rx_engine

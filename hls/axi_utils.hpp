@@ -555,6 +555,17 @@ void rshiftWordByOctet(	uint16_t offset,
 
 		output.write(sendWord);
 		fsmState = PKG;
+		if (offset != 0 && !input.empty())
+		{
+			input.read(currWord);
+			prevWord = currWord;
+			rs_firstWord = false;
+			if (currWord.last)
+			{
+				rs_firstWord = true;
+				fsmState = REMAINDER;
+			}
+		}
 		break;
 	}
 }
