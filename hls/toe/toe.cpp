@@ -1324,6 +1324,8 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS aggregate variable=rxDataRspMeta compact=bit
 	#pragma HLS INTERFACE ap_none register port=zcRx
 	#pragma HLS stable variable=zcRx
+	#pragma HLS stable variable=myIpAddress
+	#pragma HLS stable variable=maxSegmentSize
 	#pragma HLS INTERFACE ap_vld port=zcRelBad
 #endif
 #ifdef V80_RX_DEBUG
