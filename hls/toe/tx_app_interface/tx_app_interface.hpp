@@ -35,7 +35,7 @@ using namespace hls;
 struct txAppTableEntry
 {
 	ap_uint<WINDOW_BITS>		ackd;
-	ap_uint<WINDOW_BITS>		mempt;
+	txPosition		mempt;
 #if (TCP_NODELAY)
 	ap_uint<WINDOW_BITS> 	min_window;
 #endif

@@ -307,12 +307,12 @@ struct txAppTxSarQuery
 {
 	ap_uint<16> sessionID;
 	//ap_uint<16> ackd;
-	ap_uint<WINDOW_BITS> mempt;
+	txPosition mempt;
 	bool		write;
 	txAppTxSarQuery() {}
 	txAppTxSarQuery(ap_uint<16> id)
 				:sessionID(id), mempt(0), write(false) {}
-	txAppTxSarQuery(ap_uint<16> id, ap_uint<WINDOW_BITS> pt)
+	txAppTxSarQuery(ap_uint<16> id, txPosition pt)
 			:sessionID(id), mempt(pt), write(true) {}
 };
 
@@ -337,7 +337,7 @@ struct txAppTxSarReply
 {
 	ap_uint<16> sessionID;
 	ap_uint<WINDOW_BITS> ackd;
-	ap_uint<WINDOW_BITS> mempt;
+	txPosition mempt;
 #if (TCP_NODELAY)
 	ap_uint<WINDOW_BITS> min_window;
 #endif
@@ -346,7 +346,7 @@ struct txAppTxSarReply
 	txAppTxSarReply(ap_uint<16> id, ap_uint<16> ackd, ap_uint<16> pt)
 		:sessionID(id), ackd(ackd), mempt(pt) {}
 #else
-	txAppTxSarReply(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd, ap_uint<WINDOW_BITS> pt, ap_uint<WINDOW_BITS> min_window)
+	txAppTxSarReply(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd, txPosition pt, ap_uint<WINDOW_BITS> min_window)
 		:sessionID(id), ackd(ackd), mempt(pt), min_window(min_window) {}
 #endif
 };
@@ -363,21 +363,21 @@ struct txAppTxSarPush
 struct txSarAckPush
 {
 	ap_uint<16> sessionID;
-	ap_uint<WINDOW_BITS> ackd;
+	txPosition ackd;
 #if (TCP_NODELAY)
 	ap_uint<WINDOW_BITS> min_window;
 #endif
 	ap_uint<1>	init;
 	txSarAckPush() {}
 #if !(TCP_NODELAY)
-	txSarAckPush(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd)
+	txSarAckPush(ap_uint<16> id, txPosition ackd)
 		:sessionID(id), ackd(ackd), init(0) {}
-	txSarAckPush(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd, ap_uint<1> init)
+	txSarAckPush(ap_uint<16> id, txPosition ackd, ap_uint<1> init)
 		:sessionID(id), ackd(ackd), init(init) {}
 #else
-	txSarAckPush(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd, ap_uint<WINDOW_BITS> min_window)
+	txSarAckPush(ap_uint<16> id, txPosition ackd, ap_uint<WINDOW_BITS> min_window)
 		:sessionID(id), ackd(ackd), min_window(min_window), init(0) {}
-	txSarAckPush(ap_uint<16> id, ap_uint<WINDOW_BITS> ackd, ap_uint<WINDOW_BITS> min_window, ap_uint<1> init)
+	txSarAckPush(ap_uint<16> id, txPosition ackd, ap_uint<WINDOW_BITS> min_window, ap_uint<1> init)
 		:sessionID(id), ackd(ackd), min_window(min_window), init(init) {}
 #endif
 };

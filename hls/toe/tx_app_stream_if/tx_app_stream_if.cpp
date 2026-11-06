@@ -109,7 +109,7 @@ void tasi_metaLoader(	stream<appTxMeta>&			appTxDataReqMetaData,
 				ap_uint<32> pkgAddr;
 				pkgAddr(31, 30) = 0x00;
 				pkgAddr(29, WINDOW_BITS) = tasi_writeMeta.sessionID(13, 0);
-				pkgAddr(WINDOW_BITS-1, 0) = writeSar.mempt;
+				pkgAddr(WINDOW_BITS-1, 0) = writeSar.mempt(WINDOW_BITS-1, 0);
 
 				tasi_meta2pkgPushCmd.write(mmCmd(pkgAddr, tasi_writeMeta.length));
 #ifdef V80_ZC

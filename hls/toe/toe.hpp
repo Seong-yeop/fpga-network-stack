@@ -76,6 +76,12 @@ const unsigned WINDOW_BITS = 15;
 #endif
 
 const unsigned BUFFER_SIZE = (1 << WINDOW_BITS);
+
+#ifdef V80_ZC
+typedef ap_uint<20> txPosition;
+#else
+typedef ap_uint<WINDOW_BITS> txPosition;
+#endif
 const unsigned CONGESTION_WINDOW_MAX = (BUFFER_SIZE - 2048);
 const unsigned NOTIFICATION_EXTRA_BITS = (WINDOW_BITS > 18) ? 4 : 3;
 
@@ -108,6 +114,10 @@ struct mmCmd
 	mmCmd() {}
 	mmCmd(ap_uint<32> addr, ap_uint<16> len)
 		:bbt(len), type(1), dsa(0), eof(1), drr(1), saddr(addr), tag(0), rsvd(0) {}
+#ifdef V80_ZC
+	mmCmd(ap_uint<32> addr, ap_uint<16> len, ap_uint<4> posHigh)
+		:bbt(len), type(1), dsa(0), eof(1), drr(1), saddr(addr), tag(0), rsvd(posHigh) {}
+#endif
 	/*mm_cmd(ap_uint<32> addr, ap_uint<16> len, ap_uint<1> last)
 		:bbt(len), type(1), dsa(0), eof(last), drr(1), saddr(addr), tag(0), rsvd(0) {}*/
 	/*mm_cmd(ap_uint<32> addr, ap_uint<16> len, ap_uint<4> dsa)

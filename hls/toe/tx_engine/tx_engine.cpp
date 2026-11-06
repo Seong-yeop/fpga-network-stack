@@ -472,7 +472,11 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				// Only send a packet if there is data
 				if (meta.length != 0)
 				{
+#ifdef V80_ZC
+					txBufferReadCmd.write(mmCmd(pkgAddr, meta.length, ap_uint<4>(txSar.ackd(19, WINDOW_BITS))));
+#else
 					txBufferReadCmd.write(mmCmd(pkgAddr, meta.length));
+#endif
 					txEng_ipMetaFifoOut.write(meta.length);
 					txEng_tcpMetaFifoOut.write(meta);
 					txEng_isLookUpFifoOut.write(true);
@@ -1687,7 +1691,11 @@ void txEngMemAccessBreakdown(	hls::stream<mmCmd>&	inputMemAccess,
 				lengthFirstAccess = BUFFER_SIZE - cmd.saddr(WINDOW_BITS-1, 0);
 				
 				memAccessBreakdown2txPkgStitcher.write(true);
+#ifdef V80_ZC
+				outputMemAccess.write(mmCmd(cmd.saddr, lengthFirstAccess, cmd.rsvd));
+#else
 				outputMemAccess.write(mmCmd(cmd.saddr, lengthFirstAccess));
+#endif
 				txEngBreakdownState = 1;
 			}
 			else
@@ -1701,7 +1709,11 @@ void txEngMemAccessBreakdown(	hls::stream<mmCmd>&	inputMemAccess,
 			{
 				ap_uint<32> ringStart = cmd.saddr;
 				ringStart(WINDOW_BITS-1, 0) = 0;
+#ifdef V80_ZC
+				outputMemAccess.write(mmCmd(ringStart, cmd.bbt - lengthFirstAccess, ap_uint<4>(cmd.rsvd + 1)));
+#else
 				outputMemAccess.write(mmCmd(ringStart, cmd.bbt - lengthFirstAccess));
+#endif
 			}
 			txEngBreakdownState = 0;
 		break;
