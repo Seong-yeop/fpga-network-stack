@@ -255,7 +255,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #endif
 		if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
 		{
-			rxSar2ackSched_req.write_nb(ackRequest(rel.sessionID, true));
+			rxSar2ackSched_req.write(ackRequest(rel.sessionID, true));
 		}
 	}
 #endif
@@ -302,7 +302,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 			zc_cv = znew - zentry.base;
 			if (!zadvertised[WINDOW_BITS-1] && zopened >= MSS && zopened >= (ap_uint<WINDOW_BITS+1>(zadvertised) << 1))
 			{
-				rxSar2ackSched_req.write_nb(ackRequest(zrel.sessionID, true));
+				rxSar2ackSched_req.write(ackRequest(zrel.sessionID, true));
 			}
 		}
 	}
