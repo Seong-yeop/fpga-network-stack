@@ -43,5 +43,6 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 					stream<ap_uint<16> >&		stateTable2sLookup_releaseSession
 #ifdef V80_ZC
 					, stream<ap_uint<16> >&		stateTable2rxEng_close
+					, ap_uint<1>				zcRx
 #endif
 					);

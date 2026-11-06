@@ -921,6 +921,7 @@ V80_ZC_ARGS
 					stateTable2sLookup_releaseSession
 #ifdef V80_ZC
 					, stateTable2rxEng_close
+					, zcRx
 #endif
 					);
 	// RX Sar Table

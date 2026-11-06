@@ -56,6 +56,7 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 					stream<ap_uint<16> >&		stateTable2sLookup_releaseSession
 #ifdef V80_ZC
 					, stream<ap_uint<16> >&		stateTable2rxEng_close
+					, ap_uint<1>				zcRx
 #endif
 					)
 {
@@ -156,10 +157,13 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 		}
 		else
 		{
+#ifdef V80_ZC
+			sessionState stt_closeState = state_table[stt_closeSessionID];
+#endif
 			state_table[stt_closeSessionID] = CLOSED;
 			stateTable2sLookup_releaseSession.write(stt_closeSessionID);
 #ifdef V80_ZC
-			if (stt_closeNotify)
+			if (stt_closeNotify && (!zcRx || (stt_closeState != LAST_ACK && stt_closeState != CLOSING && stt_closeState != TIME_WAIT && stt_closeState != CLOSED)))
 			{
 				stateTable2rxEng_close.write(stt_closeSessionID);
 			}
@@ -210,10 +214,13 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 	{
 		if (((stt_closeSessionID != stt_rxSessionID) || !stt_rxSessionLocked) && ((stt_closeSessionID != stt_txSessionID) || !stt_txSessionLocked))
 		{
+#ifdef V80_ZC
+			sessionState stt_closeState = state_table[stt_closeSessionID];
+#endif
 			state_table[stt_closeSessionID] = CLOSED;
 			stateTable2sLookup_releaseSession.write(stt_closeSessionID);
 #ifdef V80_ZC
-			if (stt_closeNotify)
+			if (stt_closeNotify && (!zcRx || (stt_closeState != LAST_ACK && stt_closeState != CLOSING && stt_closeState != TIME_WAIT && stt_closeState != CLOSED)))
 			{
 				stateTable2rxEng_close.write(stt_closeSessionID);
 			}
