@@ -39,8 +39,8 @@
 #ifdef V80_ZC
 #define V80_ZC_ARGS , hls::stream<appRxRelease>& rxDataRel, hls::stream<appAckEvent>& ackEvent, ap_uint<1> zcRx, ap_uint<32>& zcRelBad
 #define V80_ZC_PASS , rxDataRel, ackEvent, zcRx, zcRelBad
-#define V80_ZC_RX_ENGINE_ARGS , hls::stream<ap_uint<16> >& stateTable2rxEng_close
-#define V80_ZC_RX_ENGINE_PASS , stateTable2rxEng_close
+#define V80_ZC_RX_ENGINE_ARGS , hls::stream<ap_uint<16> >& stateTable2rxEng_close, ap_uint<1> zcRx
+#define V80_ZC_RX_ENGINE_PASS , stateTable2rxEng_close, zcRx
 #else
 #define V80_ZC_ARGS
 #define V80_ZC_PASS

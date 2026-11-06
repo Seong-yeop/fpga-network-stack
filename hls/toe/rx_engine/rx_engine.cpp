@@ -1168,6 +1168,9 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_uint<16>						rxbuffer_data_count,
 						ap_uint<16>						rxbuffer_max_data_count
 #endif
+#ifdef V80_ZC
+						, ap_uint<1>						zcRx
+#endif
 #ifdef V80_RX_DEBUG
 						, ap_uint<192>&						dbgFsm
 						, ap_uint<192>&						dbgGap
@@ -1412,6 +1415,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 #else
 					ap_uint<WINDOW_BITS> free_space = ((rxSar.appd - rxSar.head(WINDOW_BITS-1, 0)) - 1);
 #endif
+#ifdef V80_ZC
+					bool lengthFits = zcRx ? (free_space >= fsm_meta.meta.length) : (free_space > fsm_meta.meta.length);
+#else
+					bool lengthFits = free_space > fsm_meta.meta.length;
+#endif
 					
 					if (fsm_meta.meta.length != 0)
 					{
@@ -1430,6 +1438,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_uint<32> segEnd = fsm_meta.meta.seqNumb + fsm_meta.meta.length;
 						ap_int<32> endToOffset = segEnd - rxSar.offset;
 						ap_int<32> endToHead = segEnd - rxSar.head;
+#ifdef V80_ZC
+						bool endFits = zcRx ? (endToHead <= (ap_int<32>)free_space) : (endToHead < (ap_int<32>)free_space);
+#else
+						bool endFits = endToHead < (ap_int<32>)free_space;
+#endif
 						bool stored = false;
 #ifdef V80_ZC
 						if (tcpState == LAST_ACK || tcpState == CLOSING)
@@ -1440,7 +1453,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						}
 						else
 #endif
-						if (!rxSar.gap && seqDiff == 0 && free_space > fsm_meta.meta.length)
+						if (!rxSar.gap && seqDiff == 0 && lengthFits)
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, segEnd, rxSar.offset, rxSar.gap));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
@@ -1450,7 +1463,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 							dbg_acc_sid = fsm_meta.sessionID; dbg_acc_seq = fsm_meta.meta.seqNumb; dbg_acc_len = fsm_meta.meta.length;
 #endif
 						}
-						else if (!rxSar.gap && seqDiff > 0 && endToHead < (ap_int<32>)free_space)
+						else if (!rxSar.gap && seqDiff > 0 && endFits)
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, segEnd, fsm_meta.meta.seqNumb, true));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, 0, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
@@ -1459,7 +1472,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 							dbg_space++;
 #endif
 						}
-						else if (rxSar.gap && fsm_meta.meta.seqNumb == rxSar.head && free_space > fsm_meta.meta.length)
+						else if (rxSar.gap && fsm_meta.meta.seqNumb == rxSar.head && lengthFits)
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, rxSar.recvd, segEnd, rxSar.offset, rxSar.gap));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, 0, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
@@ -1486,7 +1499,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 							dbg_occupancy++;
 #endif
 						}
-						else if (rxSar.gap && seqDiff == 0 && endToHead < (ap_int<32>)free_space)
+						else if (rxSar.gap && seqDiff == 0 && endFits)
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, segEnd, rxSar.offset, false));
 							rxEng2rxApp_notification.write(appNotification(fsm_meta.sessionID, fsm_meta.meta.length, fsm_meta.srcIpAddress, fsm_meta.dstIpPort));
@@ -1579,7 +1592,7 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 					{
 						//send ack only when packet in-order
 #if !(RX_DDR_BYPASS)					
-						if (!rxSar.gap && (fsm_meta.meta.seqNumb == rxSar.recvd) && (free_space > fsm_meta.meta.length))
+						if (!rxSar.gap && (fsm_meta.meta.seqNumb == rxSar.recvd) && lengthFits)
 #else
 						if ((fsm_meta.meta.seqNumb == rxSar.recvd) && ((rxbuffer_max_data_count - rxbuffer_data_count) > 375))
 #endif
@@ -1792,8 +1805,16 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 				{
 					rxEng2timer_clearRetransmitTimer.write(rxRetransmitTimerUpdate(fsm_meta.sessionID, finAck.allAcked, finAck.aboveRecover));
 				}
+#ifdef V80_ZC
+				ap_uint<WINDOW_BITS> finFree = (rxSar.released - rxSar.head(WINDOW_BITS-1, 0)) - 1;
+				ap_int<32> finEndToHead = fsm_meta.meta.seqNumb + fsm_meta.meta.length - rxSar.head;
+				bool finEndFits = zcRx ? (finEndToHead <= (ap_int<32>)finFree) : (finEndToHead < (ap_int<32>)finFree);
+				bool finFits = fsm_meta.meta.length == 0 || finEndToHead <= 0 || finEndFits;
+#else
+				const bool finFits = true;
+#endif
 				// Check state and if FIN in order, Current out of order FINs are not accepted
-				if ((tcpState == ESTABLISHED || tcpState == FIN_WAIT_1 || tcpState == FIN_WAIT_2) && (rxSar.recvd == fsm_meta.meta.seqNumb))
+				if ((tcpState == ESTABLISHED || tcpState == FIN_WAIT_1 || tcpState == FIN_WAIT_2) && (rxSar.recvd == fsm_meta.meta.seqNumb) && finFits)
 				{
 					rxEng2txSar_upd_req.write((rxTxSarQuery(fsm_meta.sessionID, fsm_meta.meta.ackNumb, fsm_meta.meta.winSize, txSar.cong_window, txSar.slowstart_threshold, txSar.recover, txSar.count, txSar.fastRetransmitted, txSar.loss, 0)));
 
@@ -2547,6 +2568,9 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 							rxEng2rxApp_notification,
 							rxbuffer_data_count,
 							rxbuffer_max_data_count
+#endif
+#ifdef V80_ZC
+							, zcRx
 #endif
 #ifdef V80_RX_DEBUG
 							, dbgRxFsm
