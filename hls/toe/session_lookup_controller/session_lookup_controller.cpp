@@ -30,6 +30,60 @@
 
 using namespace hls;
 
+#ifdef V80_ZC
+void sessionIdHold(	stream<ap_uint<14> >&		fin_id,
+					stream<ap_uint<14> >&		held_id,
+					ap_uint<1>					zcRx)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+
+	static stream<ap_uint<38> > slc_sidHold("slc_sidHold");
+	#pragma HLS stream variable=slc_sidHold depth=256
+	static ap_uint<24> sh_now = 0;
+	static ap_uint<38> sh_head = 0;
+	static ap_uint<38> sh_in = 0;
+	static bool sh_in_v = false;
+	static bool sh_valid = false;
+	static bool sh_due = false;
+	static ap_uint<1> sh_zc = 0;
+
+	ap_uint<24> sh_stamp = sh_head(23, 0);
+	ap_uint<24> sh_age = sh_now - sh_stamp;
+	bool sh_out = sh_due;
+	bool sh_load = sh_out || !sh_valid;
+	bool sh_over = !sh_zc || sh_age >= V80_SID_HOLD_CYCLES;
+	ap_uint<14> sh_id;
+
+	sh_due = !sh_load && sh_over;
+	sh_zc = zcRx;
+
+	if (sh_in_v)
+	{
+		slc_sidHold.write(sh_in);
+	}
+	if (sh_out)
+	{
+		held_id.write(sh_head(37, 24));
+	}
+	if (sh_load)
+	{
+		sh_valid = !slc_sidHold.empty();
+		if (sh_valid)
+		{
+			slc_sidHold.read(sh_head);
+		}
+	}
+	sh_in_v = !fin_id.empty();
+	if (sh_in_v)
+	{
+		fin_id.read(sh_id);
+		sh_in = (sh_id, sh_now);
+	}
+	sh_now++;
+}
+#endif
+
 /** @ingroup session_lookup_controller
  *  SessionID manager
  *  @param[in]		fin_id, IDs that are released and appended to the SessionID free list
@@ -345,7 +399,11 @@ void session_lookup_controller(	stream<sessionLookupQuery>&			rxEng2sLookup_req,
 								//stream<rtlSessionUpdateRequest>&	sessionDelete_req,
 								stream<rtlSessionUpdateReply>&		sessionUpdate_rsp,
 								ap_uint<16>& regSessionCount,
-								ap_uint<32>						myIpAddress)
+								ap_uint<32>						myIpAddress
+#ifdef V80_ZC
+								, ap_uint<1>					zcRx
+#endif
+								)
 {
 //#pragma HLS DATAFLOW
 #pragma HLS INLINE
@@ -391,7 +449,14 @@ void session_lookup_controller(	stream<sessionLookupQuery>&			rxEng2sLookup_req,
 						slc_sessionIdFinFifo,
 						regSessionCount);
 
+#ifdef V80_ZC
+	static stream<ap_uint<14> > slc_sessionIdHeldFifo("slc_sessionIdHeldFifo");
+	#pragma HLS stream variable=slc_sessionIdHeldFifo depth=2
+	sessionIdHold(slc_sessionIdFinFifo, slc_sessionIdHeldFifo, zcRx);
+	sessionIdManager(slc_sessionIdFreeList, slc_sessionIdHeldFifo);
+#else
 	sessionIdManager(slc_sessionIdFreeList, slc_sessionIdFinFifo);
+#endif
 
 	updateReplyHandler(	sessionUpdate_rsp,
 						slc_sessionInsert_rsp);

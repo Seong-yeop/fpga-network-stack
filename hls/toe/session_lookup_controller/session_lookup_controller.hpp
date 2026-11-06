@@ -28,6 +28,10 @@
 
 #include "../toe_internals.hpp"
 
+#if defined(V80_ZC) && !defined(V80_SID_HOLD_CYCLES)
+#define V80_SID_HOLD_CYCLES (1 << 22)
+#endif
+
 using namespace hls;
 
 /** @ingroup session_lookup_controller
@@ -185,4 +189,8 @@ void session_lookup_controller(	stream<sessionLookupQuery>&			rxEng2sLookup_req,
 								stream<rtlSessionUpdateReply>&		sessionUpdate_rsp,
 								//ap_uint<16>&						relSessionCount,
 								ap_uint<16>&						regSessionCount,
-								ap_uint<32>							myIpAddress);
+								ap_uint<32>							myIpAddress
+#ifdef V80_ZC
+								, ap_uint<1>						zcRx
+#endif
+								);

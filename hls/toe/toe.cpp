@@ -909,7 +909,11 @@ V80_ZC_ARGS
 								//sessionDelete_req,
 								sessionUpdate_rsp,
 								regSessionCount,
-								myIpAddress);
+								myIpAddress
+#ifdef V80_ZC
+								, zcRx
+#endif
+								);
 	// State Table
 	state_table(	rxEng2stateTable_upd_req,
 					txApp2stateTable_upd_req,
