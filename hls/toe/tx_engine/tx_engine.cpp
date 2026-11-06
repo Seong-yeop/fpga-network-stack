@@ -600,7 +600,11 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 
 				// construct SYN_ACK message
 				meta.ackNumb = rxSar.recvd;
+#ifdef V80_ZC
+				meta.window_size = (rxSar.windowSize == 0) ? ap_uint<16>(0) : ap_uint<16>(0xFFFF);
+#else
 				meta.window_size = 0xFFFF;
+#endif
 				meta.length = 4; // For MSS Option, 4 bytes
 				meta.ack = 1;
 				meta.rst = 0;
