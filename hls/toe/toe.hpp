@@ -63,7 +63,9 @@ const unsigned DATA_WIDTH_BITS = ConstLog2(DATA_WIDTH);
 const unsigned DATA_KEEP_BITS = ConstLog2(DATA_WIDTH/8);
 
 const unsigned WINDOW_SCALE_BITS = 3;
-#if (WINDOW_SCALE)
+#ifdef V80_WINDOW_BITS
+const unsigned WINDOW_BITS = V80_WINDOW_BITS;
+#elif (WINDOW_SCALE)
 const unsigned WINDOW_BITS = 15 + WINDOW_SCALE_BITS;
 #else
 const unsigned WINDOW_BITS = 15;
@@ -71,6 +73,7 @@ const unsigned WINDOW_BITS = 15;
 
 const unsigned BUFFER_SIZE = (1 << WINDOW_BITS);
 const unsigned CONGESTION_WINDOW_MAX = (BUFFER_SIZE - 2048);
+const unsigned NOTIFICATION_EXTRA_BITS = (WINDOW_BITS > 18) ? 4 : 3;
 
 
 
@@ -148,7 +151,7 @@ struct appNotification
 	ap_uint<32>			ipAddress;
 	ap_uint<16>			dstPort;
 	bool				closed;
-	ap_uint<3>			extra;
+	ap_uint<NOTIFICATION_EXTRA_BITS>	extra;
 	appNotification() {}
 	appNotification(ap_uint<16> id, ap_uint<16> len, ap_uint<32> addr, ap_uint<16> port)
 				:sessionID(id), length(len), ipAddress(addr), dstPort(port), closed(false), extra(0) {}
@@ -161,13 +164,11 @@ struct appNotification
 	static appNotification gapFill(ap_uint<16> id, ap_uint<19> total, ap_uint<32> addr, ap_uint<16> port)
 	{
 		appNotification n(id, 0, addr, port);
-		ap_uint<19> t = total;
-		for (int i = 0; i < 4; i++)
-		{
-#pragma HLS UNROLL
-			if (t > 65528) { t -= 65528; n.extra++; }
-		}
-		n.length = t;
+		ap_uint<3> q = total(18, 16);
+		ap_uint<17> r = ap_uint<17>(total(15, 0)) + (ap_uint<6>(q) << 3);
+		bool more = r > 65528;
+		n.extra = ap_uint<4>(q) + (more ? 1 : 0);
+		n.length = more ? ap_uint<17>(r - 65528) : r;
 		return n;
 	}
 };

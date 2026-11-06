@@ -2008,7 +2008,7 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 	static ap_uint<6>		rand_fifoCount = 0;
 	static mmStatus			rxAppNotificationStatus1, rxAppNotificationStatus2;
 	static appNotification	rxAppNotification;
-	static ap_uint<3>		split_left = 0;
+	static ap_uint<NOTIFICATION_EXTRA_BITS>	split_left = 0;
 	static appNotification	split_note;
 
 	if (split_left != 0) {
