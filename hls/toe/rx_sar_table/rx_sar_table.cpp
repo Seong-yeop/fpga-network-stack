@@ -84,14 +84,41 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #pragma HLS DEPENDENCE variable=zc_cur inter false
 #pragma HLS reset variable=zc_cur off
 	static ap_uint<32> zc_bad = 0;
+	static bool zc_hold = false;
 	zcRelBad = zc_bad;
 	bool zc_cw = false;
 	ap_uint<16> zc_ca = 0;
 	ap_uint<WINDOW_BITS> zc_cv = 0;
+	bool zc_tx = !txEng2rxSar_req.empty();
+	bool zc_app_ne = !rxApp2rxSar_upd_req.empty();
+	bool zc_eng_ne = !rxEng2rxSar_upd_req.empty();
+	bool zc_rel_ne = !rxApp2rxSar_release.empty();
+	bool zc_zr_ne = !rxApp2rxSar_zcRel.empty();
+	bool zc_free = !zc_tx & !zc_app_ne;
+	bool zc_open = !zc_hold;
+	bool zc_app = !zc_tx & zc_app_ne;
+	bool zc_eng = zc_free & zc_open & zc_eng_ne;
+	bool zc_rel = zc_free & !zc_eng & zc_rel_ne;
+	bool zc_zr = zc_free & zc_open & !zc_eng_ne & !zc_rel_ne & zc_zr_ne;
+	rxSarRecvd in_recvd;
+	appRxRelease zrel;
+	if (zc_eng)
+	{
+		in_recvd = rxEng2rxSar_upd_req.read();
+	}
+	if (zc_zr)
+	{
+		zrel = rxApp2rxSar_zcRel.read();
+	}
+	zc_hold = (zc_eng & in_recvd.write & in_recvd.init) | (zc_zr & zrel.arm);
 #endif
 
 	// Read only access from the Tx Engine
+#ifdef V80_ZC
+	if(zc_tx)
+#else
 	if(!txEng2rxSar_req.empty())
+#endif
 	{
 		ap_uint<16> addr = txEng2rxSar_req.read();
 		rxSarEntry entry = rx_table[addr];
@@ -180,7 +207,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		rxSar2txEng_rsp.write(reply);
 	}
 	// Read or Write access from the Rx App I/F to update the application pointer
+#ifdef V80_ZC
+	else if(zc_app)
+#else
 	else if(!rxApp2rxSar_upd_req.empty())
+#endif
 	{
 		rxSarAppd in_appd = rxApp2rxSar_upd_req.read();
 		if(in_appd.write)
@@ -197,9 +228,15 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		}
 	}
 	// Read or Write access from the Rx Engine
+#ifdef V80_ZC
+	else if(zc_eng)
+#else
 	else if(!rxEng2rxSar_upd_req.empty())
+#endif
 	{
+#ifndef V80_ZC
 		rxSarRecvd in_recvd = rxEng2rxSar_upd_req.read();
+#endif
 		if (in_recvd.write)
 		{
 			rx_table[in_recvd.sessionID].recvd = in_recvd.recvd;
@@ -241,7 +278,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		}
 	}
 #ifdef V80_RX_MEM_NO_SPLIT
+#ifdef V80_ZC
+	else if(zc_rel)
+#else
 	else if(!rxApp2rxSar_release.empty())
+#endif
 	{
 		rxSarAppd rel = rxApp2rxSar_release.read();
 		ap_uint<WINDOW_BITS> recvd = (ap_uint<WINDOW_BITS>)rx_table[rel.sessionID].recvd;
@@ -260,9 +301,8 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 	}
 #endif
 #ifdef V80_ZC
-	else if(!rxApp2rxSar_zcRel.empty())
+	else if(zc_zr)
 	{
-		appRxRelease zrel = rxApp2rxSar_zcRel.read();
 		rxSarEntry zentry = rx_table[zrel.sessionID];
 		ap_uint<WINDOW_BITS> zrecvd = (ap_uint<WINDOW_BITS>)zentry.recvd;
 		ap_uint<WINDOW_BITS> zcur = zc_cur[zrel.sessionID];
