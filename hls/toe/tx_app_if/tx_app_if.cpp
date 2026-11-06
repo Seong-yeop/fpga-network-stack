@@ -68,7 +68,9 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 				stream<openStatus>&				rtTimer2txApp_notification,
 				stream<ap_uint<16> >&			closeTimer2txApp_release,
 				stream<ap_uint<16> >&			txApp2timer_release,
+#ifndef V80_ZC
 				stream<appNotification>&		txApp2rxApp_notification,
+#endif
 				ap_uint<32>						myIpAddress)
 {
 #pragma HLS INLINE off
@@ -129,7 +131,11 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID));
 			tai_fsmState = CLOSE_CONN;
 		}
+#ifdef V80_ZC
+		else if (!closeTimer2txApp_release.empty() && !txApp2timer_release.full())
+#else
 		else if (!closeTimer2txApp_release.empty() && !txApp2timer_release.full() && !txApp2rxApp_notification.full())
+#endif
 		{
 			closeTimer2txApp_release.read(tai_closeSessionID);
 			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID));
@@ -161,12 +167,20 @@ void tx_app_if(	stream<ipTuple>&				appOpenConnReq,
 			txApp2stateTable_upd_req.write(stateQuery(tai_closeSessionID, state, 1));
 			if ((state == FIN_WAIT_2) || (state == TIME_WAIT))
 			{
+#ifdef V80_ZC
+				ap_uint<16> releaseId = tai_closeSessionID;
+				releaseId[STATE_RELEASE_NOTIFY] = (state == FIN_WAIT_2);
+				txApp2timer_release.write(releaseId);
+#else
 				txApp2timer_release.write(tai_closeSessionID);
+#endif
 			}
+#ifndef V80_ZC
 			if (state == FIN_WAIT_2)
 			{
 				txApp2rxApp_notification.write(appNotification(tai_closeSessionID, true));
 			}
+#endif
 			tai_fsmState = IDLE;
 		}
 		break;

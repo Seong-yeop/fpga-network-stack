@@ -481,6 +481,10 @@ struct extendedEvent : public event
 			:event(ev.type, ev.sessionID, ev.address, ev.length, ev.rt_count), tuple(tuple) {}
 };
 
+#ifdef V80_ZC
+static const unsigned STATE_RELEASE_NOTIFY = 15;
+#endif
+
 struct ackRequest
 {
 	ap_uint<16>	sessionID;

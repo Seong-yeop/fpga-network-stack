@@ -126,7 +126,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<ackRequest>&					rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS);
+				stream<appNotification>&			rxEng2rxApp_notification V80_ZC_RX_ENGINE_ARGS V80_RX_DEBUG_ARGS);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,

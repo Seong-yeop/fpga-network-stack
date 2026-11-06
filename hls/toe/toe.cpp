@@ -69,6 +69,59 @@ void timerCloseMerger(stream<ap_uint<16> >& in1, stream<ap_uint<16> >& in2, stre
 	}
 }
 
+#ifdef V80_ZC
+void rtReleaseTagger(	stream<ap_uint<16> >&	releaseIn,
+						stream<appNotification>&	dataIn,
+						stream<openStatus>&		synIn,
+						stream<ap_uint<16> >&	releaseOut,
+						stream<openStatus>&		synOut)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	static bool tag_releaseHeld = false;
+	static bool tag_dataHeld = false;
+	static bool tag_synHeld = false;
+	static ap_uint<16> tag_releaseId;
+	static ap_uint<16> tag_dataId;
+	static openStatus tag_syn;
+
+	if (tag_releaseHeld && tag_dataHeld && tag_dataId == tag_releaseId)
+	{
+		ap_uint<16> id = tag_releaseId;
+		id[STATE_RELEASE_NOTIFY] = 1;
+		releaseOut.write(id);
+		tag_releaseHeld = false;
+		tag_dataHeld = false;
+	}
+	else if (tag_releaseHeld && tag_synHeld && tag_syn.sessionID == tag_releaseId)
+	{
+		releaseOut.write(tag_releaseId);
+		synOut.write(tag_syn);
+		tag_releaseHeld = false;
+		tag_synHeld = false;
+	}
+	else
+	{
+		if (!tag_releaseHeld && !releaseIn.empty())
+		{
+			releaseIn.read(tag_releaseId);
+			tag_releaseHeld = true;
+		}
+		if (!tag_dataHeld && !dataIn.empty())
+		{
+			appNotification note = dataIn.read();
+			tag_dataId = note.sessionID;
+			tag_dataHeld = true;
+		}
+		if (!tag_synHeld && !synIn.empty())
+		{
+			synIn.read(tag_syn);
+			tag_synHeld = true;
+		}
+	}
+}
+#endif
+
 /** @defgroup timer Timers
  *  @ingroup tcp_module
  *  @param[in]		rxEng2timer_clearRetransmitTimer
@@ -88,13 +141,25 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 					stream<ap_uint<16> >&				closeTimer2txApp_release,
 					stream<ap_uint<16> >&				timer2stateTable_releaseState,
 					stream<event>&						timer2eventEng_setEvent,
+#ifndef V80_ZC
 					stream<appNotification>&			rtTimer2rxApp_notification,
+#endif
 					stream<openStatus>&					rtTimer2txApp_notification)
 {
 	#pragma HLS INLINE
 	
 	static stream<ap_uint<16> > rtTimer2stateTable_releaseState("rtTimer2stateTable_releaseState");
 	#pragma HLS stream variable=rtTimer2stateTable_releaseState			depth=2
+#ifdef V80_ZC
+	static stream<ap_uint<16> > rtTimer2tagger_release("rtTimer2tagger_release");
+	#pragma HLS stream variable=rtTimer2tagger_release			depth=2
+	static stream<appNotification> rtTimer2tagger_data("rtTimer2tagger_data");
+	#pragma HLS stream variable=rtTimer2tagger_data				depth=2
+	#pragma HLS aggregate variable=rtTimer2tagger_data compact=bit
+	static stream<openStatus> rtTimer2tagger_syn("rtTimer2tagger_syn");
+	#pragma HLS stream variable=rtTimer2tagger_syn				depth=2
+	#pragma HLS aggregate variable=rtTimer2tagger_syn compact=bit
+#endif
 
 	static stream<event> rtTimer2eventEng_setEvent("rtTimer2eventEng_setEvent");
 	static stream<event> probeTimer2eventEng_setEvent("probeTimer2eventEng_setEvent");
@@ -107,9 +172,20 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 	retransmit_timer(	rxEng2timer_clearRetransmitTimer,
 						txEng2timer_setRetransmitTimer,
 						rtTimer2eventEng_setEvent,
+#ifdef V80_ZC
+						rtTimer2tagger_release,
+						rtTimer2tagger_data,
+						rtTimer2tagger_syn);
+	rtReleaseTagger(	rtTimer2tagger_release,
+						rtTimer2tagger_data,
+						rtTimer2tagger_syn,
+						rtTimer2stateTable_releaseState,
+						rtTimer2txApp_notification);
+#else
 						rtTimer2stateTable_releaseState,
 						rtTimer2rxApp_notification,
 						rtTimer2txApp_notification);
+#endif
 	probe_timer(rxEng2timer_clearProbeTimer,
 				txEng2timer_setProbeTimer,
 				probeTimer2eventEng_setEvent);
@@ -119,6 +195,18 @@ void timerWrapper(	stream<rxRetransmitTimerUpdate>&	rxEng2timer_clearRetransmitT
 						rtTimer2stateTable_releaseState,
 						timer2stateTable_releaseState);
 }
+
+#ifdef V80_ZC
+void appNotificationForward(stream<appNotification>& in, stream<appNotification>& out)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	if (!in.empty())
+	{
+		out.write(in.read());
+	}
+}
+#endif
 
 #ifndef V80_RX_MEM_NO_SPLIT
 void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outputMemAccess, stream<ap_uint<1> > &rxAppDoubleAccess) {
@@ -427,8 +515,10 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 					stream<ap_uint<16> >&			appListenPortReq,
 					stream<bool>&					portTable2rxApp_listen_rsp,
 					stream<appNotification>&		rxEng2rxApp_notification,
+#ifndef V80_ZC
 					stream<appNotification>&		timer2rxApp_notification,
 					stream<appNotification>&		txApp2rxApp_notification,
+#endif
 					stream<appRxMeta>&				appRxDataRspMetadata,
 					stream<rxSarAppd>&				rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
@@ -491,11 +581,15 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 
 		 	 	appListenPortRsp, rxApp2portTable_listen_req);
 
+#ifdef V80_ZC
+	appNotificationForward(rxEng2rxApp_notification, appNotification);
+#else
 	static stream<struct appNotification>	rxApp_timerNotification("rxApp_timerNotification");
 	#pragma HLS stream variable=rxApp_timerNotification	depth=4
 	#pragma HLS aggregate variable=rxApp_timerNotification compact=bit
 	stream_merger(txApp2rxApp_notification, timer2rxApp_notification, rxApp_timerNotification);
 	stream_merger(rxApp_timerNotification, rxEng2rxApp_notification, appNotification);
+#endif
 }
 
 /** @defgroup tcp_module TCP Module
@@ -761,17 +855,22 @@ V80_ZC_ARGS
 	#pragma HLS aggregate variable=conEstablishedFifo compact=bit
 
 	static stream<appNotification> 			rxEng2rxApp_notification("rxEng2rxApp_notification");
-	static stream<appNotification>			timer2rxApp_notification("timer2rxApp_notification");
 	static stream<openStatus>				timer2txApp_notification("timer2txApp_notification");
 	#pragma HLS stream variable=rxEng2rxApp_notification		depth=1024
-	#pragma HLS stream variable=timer2rxApp_notification		depth=1024
 	#pragma HLS stream variable=timer2txApp_notification		depth=1024
 	#pragma HLS aggregate variable=rxEng2rxApp_notification compact=bit
-	#pragma HLS aggregate variable=timer2rxApp_notification compact=bit
 	#pragma HLS aggregate variable=timer2txApp_notification compact=bit
+#ifdef V80_ZC
+	static stream<ap_uint<16> >				stateTable2rxEng_close("stateTable2rxEng_close");
+	#pragma HLS stream variable=stateTable2rxEng_close			depth=8
+#else
+	static stream<appNotification>			timer2rxApp_notification("timer2rxApp_notification");
+	#pragma HLS stream variable=timer2rxApp_notification		depth=1024
+	#pragma HLS aggregate variable=timer2rxApp_notification compact=bit
 	static stream<appNotification>			txApp2rxApp_notification("txApp2rxApp_notification");
 	#pragma HLS stream variable=txApp2rxApp_notification		depth=16
 	#pragma HLS aggregate variable=txApp2rxApp_notification compact=bit
+#endif
 
 	// Port Table
 	static stream<ap_uint<16> >				rxEng2portTable_check_req("rxEng2portTable_check_req");
@@ -819,7 +918,11 @@ V80_ZC_ARGS
 					stateTable2rxEng_upd_rsp,
 					stateTable2txApp_upd_rsp,
 					stateTable2txApp_rsp,
-					stateTable2sLookup_releaseSession);
+					stateTable2sLookup_releaseSession
+#ifdef V80_ZC
+					, stateTable2rxEng_close
+#endif
+					);
 	// RX Sar Table
 	rx_sar_table(	rxEng2rxSar_upd_req,
 					rxApp2rxSar_upd_req,
@@ -876,7 +979,9 @@ V80_ZC_ARGS
 					closeTimer2txApp_release,
 					timer2stateTable_releaseState,
 					timer2eventEng_setEvent,
+#ifndef V80_ZC
 					timer2rxApp_notification,
+#endif
 					timer2txApp_notification);
 
 	static stream<ap_uint<1> > ackDelayFifoReadCount("ackDelayFifoReadCount");
@@ -930,6 +1035,7 @@ V80_ZC_ARGS
 				axis_data_count,
 				axis_max_data_count
 #endif
+				V80_ZC_RX_ENGINE_PASS
 				V80_RX_DEBUG_PASS
 				);
 	// TX Engine
@@ -963,8 +1069,10 @@ V80_ZC_ARGS
 			 	 	listenPortReq,
 			 	 	portTable2rxApp_listen_rsp,
 			 	 	rxEng2rxApp_notification,
+#ifndef V80_ZC
 			 	 	timer2rxApp_notification,
 			 	 	txApp2rxApp_notification,
+#endif
 			 	 	rxDataRspMeta,
 			 	 	rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
@@ -1012,7 +1120,9 @@ V80_ZC_ARGS
 						timer2txApp_notification,
 						closeTimer2txApp_release,
 						txApp2timer_release,
+#ifndef V80_ZC
 						txApp2rxApp_notification,
+#endif
 						myIpAddress);
 
 }

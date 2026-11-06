@@ -1431,6 +1431,15 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_int<32> endToOffset = segEnd - rxSar.offset;
 						ap_int<32> endToHead = segEnd - rxSar.head;
 						bool stored = false;
+#ifdef V80_ZC
+						if (tcpState == LAST_ACK || tcpState == CLOSING)
+						{
+#ifdef V80_RX_DEBUG
+							dbg_state++;
+#endif
+						}
+						else
+#endif
 						if (!rxSar.gap && seqDiff == 0 && free_space > fsm_meta.meta.length)
 						{
 							rxEng2rxSar_upd_req.write(rxSarRecvd(fsm_meta.sessionID, segEnd, segEnd, rxSar.offset, rxSar.gap));
@@ -2010,6 +2019,10 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 	static appNotification	rxAppNotification;
 	static ap_uint<NOTIFICATION_EXTRA_BITS>	split_left = 0;
 	static appNotification	split_note;
+#ifdef V80_ZC
+	static bool				close_held = false;
+	static appNotification	close_note;
+#endif
 
 	if (split_left != 0) {
 		if (!notificationOut.full()) {
@@ -2053,6 +2066,14 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 			}
 			//TODO else, we are screwed since the ACK is already sent
 		}
+#ifdef V80_ZC
+		else if (close_held) {
+			if (rand_fifoCount == 0) {
+				notificationOut.write(close_note);
+				close_held = false;
+			}
+		}
+#endif
 		else if (!internalNotificationFifoIn.empty() && (rand_fifoCount < 63)) {
 			internalNotificationFifoIn.read(rxAppNotification);
 			//if (rxAppNotification.length != 0) {
@@ -2064,7 +2085,12 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 
 			if (rxAppNotification.closed & rxAppNotification.length == 0)
 			{
+#ifdef V80_ZC
+				close_note = rxAppNotification;
+				close_held = true;
+#else
 				notificationOut.write(rxAppNotification);
+#endif
 			}
 			else
 			{
@@ -2075,6 +2101,23 @@ void rxAppNotificationDelayer(	stream<mmStatus>&				rxWriteStatusIn, stream<appN
 		}
 	}
 }
+
+#ifdef V80_ZC
+void rxCloseNotificationMerger(stream<appNotification>& fsmIn, stream<ap_uint<16> >& closeIn, stream<appNotification>& out)
+{
+	#pragma HLS PIPELINE II=1
+	#pragma HLS INLINE OFF
+
+	if (!fsmIn.empty())
+	{
+		out.write(fsmIn.read());
+	}
+	else if (!closeIn.empty())
+	{
+		out.write(appNotification(closeIn.read(), true));
+	}
+}
+#endif
 
 void rxEventMerger(stream<extendedEvent>& in1, stream<event>& in2, stream<extendedEvent>& out)
 {
@@ -2302,7 +2345,7 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 				stream<ackRequest>&					rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS)
+				stream<appNotification>&			rxEng2rxApp_notification V80_ZC_RX_ENGINE_ARGS V80_RX_DEBUG_ARGS)
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,
@@ -2365,6 +2408,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	static stream<appNotification> rx_internalNotificationFifo("rx_internalNotificationFifo");
 	#pragma HLS stream variable=rx_internalNotificationFifo depth=1024 //This depends on the memory delay
 	#pragma HLS aggregate  variable=rx_internalNotificationFifo compact=bit
+#ifdef V80_ZC
+	static stream<appNotification> rx_fsmNotificationFifo("rx_fsmNotificationFifo");
+	#pragma HLS stream variable=rx_fsmNotificationFifo depth=8
+	#pragma HLS aggregate  variable=rx_fsmNotificationFifo compact=bit
+#endif
 
 	static stream<mmCmd> 					rxTcpFsm2wrAccessBreakdown("rxTcpFsm2wrAccessBreakdown");
 	#pragma HLS stream variable=rxTcpFsm2wrAccessBreakdown depth=8
@@ -2490,7 +2538,11 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 							rxEng_fsmDropFifo,
 #if !(RX_DDR_BYPASS)
 							rxTcpFsm2wrAccessBreakdown,
+#ifdef V80_ZC
+							rx_fsmNotificationFifo
+#else
 							rx_internalNotificationFifo
+#endif
 #else
 							rxEng2rxApp_notification,
 							rxbuffer_data_count,
@@ -2508,6 +2560,9 @@ void rx_engine(	stream<net_axis<WIDTH> >&					ipRxData,
 	//rxEngMemWrite(rxPkgDrop2rxMemWriter, rxTcpFsm2wrAccessBreakdown, rxBufferWriteCmd, rxBufferWriteData,rxEngDoubleAccess);
 	rxEngMemWrite<WIDTH>(rxPkgDrop2rxMemWriter, rxTcpFsm2wrAccessBreakdown, rxBufferWriteCmd, rxBufferWriteData,rxEngDoubleAccess);
 
+#ifdef V80_ZC
+	rxCloseNotificationMerger(rx_fsmNotificationFifo, stateTable2rxEng_close, rx_internalNotificationFifo);
+#endif
 	rxAppNotificationDelayer(rxBufferWriteStatus, rx_internalNotificationFifo, rxEng2rxApp_notification, rxEngDoubleAccess);
 #else
 	rxPackageDropper(rxEng_dataBuffer3, rxEng_metaHandlerDropFifo, rxEng_fsmDropFifo, rxBufferWriteData);
@@ -2541,7 +2596,7 @@ template void rx_engine<DATA_WIDTH>(	stream<net_axis<DATA_WIDTH> >&					ipRxData
 				stream<ackRequest>&					rxEng2ackSched_req,
 #if !(RX_DDR_BYPASS)
 				stream<mmCmd>&						rxBufferWriteCmd,
-				stream<appNotification>&			rxEng2rxApp_notification V80_RX_DEBUG_ARGS);
+				stream<appNotification>&			rxEng2rxApp_notification V80_ZC_RX_ENGINE_ARGS V80_RX_DEBUG_ARGS);
 #else
 				stream<appNotification>&			rxEng2rxApp_notification,
 				ap_uint<16>					rxbuffer_data_count,

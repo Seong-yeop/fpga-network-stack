@@ -53,7 +53,11 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 					stream<sessionState>&		stateTable2rxEng_upd_rsp,
 					stream<sessionState>&		stateTable2TxApp_upd_rsp,
 					stream<sessionState>&		stateTable2txApp_rsp,
-					stream<ap_uint<16> >&		stateTable2sLookup_releaseSession)
+					stream<ap_uint<16> >&		stateTable2sLookup_releaseSession
+#ifdef V80_ZC
+					, stream<ap_uint<16> >&		stateTable2rxEng_close
+#endif
+					)
 {
 #pragma HLS PIPELINE II=1
 
@@ -73,6 +77,9 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 
 	static ap_uint<16> stt_closeSessionID;
 	static bool stt_closeWait = false;
+#ifdef V80_ZC
+	static bool stt_closeNotify = false;
+#endif
 
 	ap_uint<16> sessionID;
 
@@ -138,6 +145,10 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 	else if (!timer2stateTable_releaseState.empty() && !stt_closeWait) //can only be a close
 	{
 		timer2stateTable_releaseState.read(stt_closeSessionID);
+#ifdef V80_ZC
+		stt_closeNotify = stt_closeSessionID[STATE_RELEASE_NOTIFY];
+		stt_closeSessionID[STATE_RELEASE_NOTIFY] = 0;
+#endif
 		// Check if locked
 		if (((stt_closeSessionID == stt_rxSessionID) && stt_rxSessionLocked) ||  ((stt_closeSessionID == stt_txSessionID) && stt_txSessionLocked))
 		{
@@ -147,6 +158,12 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 		{
 			state_table[stt_closeSessionID] = CLOSED;
 			stateTable2sLookup_releaseSession.write(stt_closeSessionID);
+#ifdef V80_ZC
+			if (stt_closeNotify)
+			{
+				stateTable2rxEng_close.write(stt_closeSessionID);
+			}
+#endif
 		}
 	}
 	else if (stt_txWait)
@@ -195,6 +212,12 @@ void state_table(	stream<stateQuery>&			rxEng2stateTable_upd_req,
 		{
 			state_table[stt_closeSessionID] = CLOSED;
 			stateTable2sLookup_releaseSession.write(stt_closeSessionID);
+#ifdef V80_ZC
+			if (stt_closeNotify)
+			{
+				stateTable2rxEng_close.write(stt_closeSessionID);
+			}
+#endif
 			stt_closeWait = false;
 		}
 	}

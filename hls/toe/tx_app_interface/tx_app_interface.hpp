@@ -72,5 +72,7 @@ void tx_app_interface(	stream<appTxMeta>&			appTxDataReqMetadata,
 					stream<openStatus>&				rtTimer2txApp_notification,
 					stream<ap_uint<16> >&			closeTimer2txApp_release,
 					stream<ap_uint<16> >&			txApp2timer_release,
+#ifndef V80_ZC
 					stream<appNotification>&		txApp2rxApp_notification,
+#endif
 					ap_uint<32>						myIpAddress);
