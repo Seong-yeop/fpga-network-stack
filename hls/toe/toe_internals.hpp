@@ -140,6 +140,9 @@ struct rxSarEntry
 #ifdef V80_RX_MEM_NO_SPLIT
 	ap_uint<WINDOW_BITS> released;
 #endif
+#ifdef V80_ZC
+	ap_uint<WINDOW_BITS> base;
+#endif
 };
 
 struct rxSarReply
@@ -190,11 +193,23 @@ struct rxSarAppd
 	ap_uint<16> sessionID;
 	ap_uint<WINDOW_BITS> appd;
 	ap_uint<1>	write;
+#ifdef V80_ZC
+	ap_uint<WINDOW_BITS> base;
+	ap_uint<1>	skip;
+	rxSarAppd() {}
+	rxSarAppd(ap_uint<16> id)
+				:sessionID(id), appd(0), write(0), base(0), skip(0) {}
+	rxSarAppd(ap_uint<16> id, ap_uint<WINDOW_BITS> appd)
+				:sessionID(id), appd(appd), write(1), base(0), skip(0) {}
+	rxSarAppd(ap_uint<16> id, ap_uint<WINDOW_BITS> appd, ap_uint<WINDOW_BITS> base, ap_uint<1> skip)
+				:sessionID(id), appd(appd), write(1), base(base), skip(skip) {}
+#else
 	rxSarAppd() {}
 	rxSarAppd(ap_uint<16> id)
 				:sessionID(id), appd(0), write(0) {}
 	rxSarAppd(ap_uint<16> id, ap_uint<WINDOW_BITS> appd)
 				:sessionID(id), appd(appd), write(1) {}
+#endif
 };
 
 

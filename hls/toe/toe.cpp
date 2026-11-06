@@ -155,6 +155,59 @@ void rxAppMemAccessBreakdown(stream<mmCmd> &inputMemAccess, stream<mmCmd> &outpu
 
 #endif
 #if !(RX_DDR_BYPASS)
+#ifdef V80_ZC
+template <int WIDTH>
+void rxAppMemDataForward(stream<net_axis<WIDTH> >& rxBufferReadData, stream<net_axis<WIDTH> >& rxDataRsp,
+						stream<rxSarAppd>& rxAppReadEnd, stream<rxSarAppd>& rxApp2rxSar_release, ap_uint<1> zcRx)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	static bool fw_pending = false;
+	static rxSarAppd fw_entry;
+	bool done = false;
+	if (fw_pending)
+	{
+		if (fw_entry.skip)
+		{
+			done = true;
+		}
+		else if (!rxBufferReadData.empty())
+		{
+			net_axis<WIDTH> word = rxBufferReadData.read();
+			rxDataRsp.write(word);
+			done = word.last;
+		}
+		if (done && !zcRx)
+		{
+			rxApp2rxSar_release.write(fw_entry);
+		}
+	}
+	if (!fw_pending || done)
+	{
+		if (!rxAppReadEnd.empty())
+		{
+			rxAppReadEnd.read(fw_entry);
+			fw_pending = true;
+		}
+		else
+		{
+			fw_pending = false;
+		}
+	}
+}
+
+void txAckEventTap(stream<txSarAckPush>& ackIn, stream<txSarAckPush>& ackOut, stream<appAckEvent>& ackEvent)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	if (!ackIn.empty())
+	{
+		txSarAckPush push = ackIn.read();
+		ackOut.write(push);
+		ackEvent.write(appAckEvent(push.sessionID, push.ackd, push.init));
+	}
+}
+#else
 template <int WIDTH>
 void rxAppMemDataForward(stream<net_axis<WIDTH> >& rxBufferReadData, stream<net_axis<WIDTH> >& rxDataRsp,
 						stream<rxSarAppd>& rxAppReadEnd, stream<rxSarAppd>& rxApp2rxSar_release)
@@ -169,6 +222,7 @@ void rxAppMemDataForward(stream<net_axis<WIDTH> >& rxBufferReadData, stream<net_
 			rxApp2rxSar_release.write(rxAppReadEnd.read());
 	}
 }
+#endif
 #ifndef V80_RX_MEM_NO_SPLIT
 template <int WIDTH> 
 void rxAppMemDataRead(	stream<net_axis<WIDTH> >&	rxBufferReadData,
@@ -375,7 +429,7 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 					stream<appNotification>&		rxEng2rxApp_notification,
 					stream<appNotification>&		timer2rxApp_notification,
 					stream<appNotification>&		txApp2rxApp_notification,
-					stream<ap_uint<16> >&			appRxDataRspMetadata,
+					stream<appRxMeta>&				appRxDataRspMetadata,
 					stream<rxSarAppd>&				rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
 					stream<mmCmd>&					rxBufferReadCmd,
@@ -387,7 +441,11 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 					stream<ap_uint<16> >& 			rxApp2portTable_listen_req,
 					stream<appNotification>&		appNotification,
 					stream<net_axis<WIDTH> > 				&rxBufferReadData,
-					stream<net_axis<WIDTH> > 				&rxDataRsp)
+					stream<net_axis<WIDTH> > 				&rxDataRsp
+#ifdef V80_ZC
+					, ap_uint<1>						zcRx
+#endif
+					)
 {
 	#pragma HLS INLINE
 	// #pragma HLS PIPELINE II=1
@@ -410,7 +468,11 @@ void rxAppWrapper(	stream<appReadRequest>&			appRxDataReq,
 	#pragma HLS aggregate variable=rxAppReadEnd compact=bit
 	rx_app_stream_if(appRxDataReq, rxSar2rxApp_upd_rsp, appRxDataRspMetadata,
 						rxApp2rxSar_upd_req, rxBufferReadCmd, rxAppReadEnd);
+#ifdef V80_ZC
+	rxAppMemDataForward<WIDTH>(rxBufferReadData, rxDataRsp, rxAppReadEnd, rxApp2rxSar_release, zcRx);
+#else
 	rxAppMemDataForward<WIDTH>(rxBufferReadData, rxDataRsp, rxAppReadEnd, rxApp2rxSar_release);
+#endif
 #else
 	rx_app_stream_if(appRxDataReq, rxSar2rxApp_upd_rsp, appRxDataRspMetadata,
 						rxApp2rxSar_upd_req, rxAppStreamIf2memAccessBreakdown);
@@ -510,7 +572,7 @@ void toe_core(	// Data & Memory Interface
 
 			stream<bool>&							listenPortRsp,
 			stream<appNotification>&				notification,
-			stream<ap_uint<16> >&					rxDataRspMeta,
+			stream<appRxMeta>&					rxDataRspMeta,
 			stream<net_axis<WIDTH> >&						rxDataRsp,
 			stream<openStatus>&						openConnRsp,
 			stream<appTxRsp>&					txDataRsp,
@@ -527,6 +589,7 @@ void toe_core(	// Data & Memory Interface
 , ap_uint<16> maxSegmentSize
 #endif
 V80_RX_DEBUG_ARGS
+V80_ZC_ARGS
 )
 {
 	#pragma HLS INLINE
@@ -604,6 +667,11 @@ V80_RX_DEBUG_ARGS
 	static stream<rxTxSarQuery>			rxEng2txSar_upd_req("rxEng2txSar_upd_req");
 	static stream<rxTxSarReply>			txSar2rxEng_upd_rsp("txSar2rxEng_upd_rsp");
 	static stream<txSarAckPush>			txSar2txApp_ack_push("txSar2txApp_ack_push");
+#ifdef V80_ZC
+	static stream<txSarAckPush>			txSar2ackTap("txSar2ackTap");
+	#pragma HLS stream variable=txSar2ackTap	depth=2
+	#pragma HLS aggregate variable=txSar2ackTap compact=bit
+#endif
 	static stream<txAppTxSarPush>		txApp2txSar_push("txApp2txSar_push");
 	#pragma HLS stream variable=txEng2txSar_upd_req		depth=16
 	#pragma HLS stream variable=txSar2txEng_upd_rsp		depth=16
@@ -763,6 +831,11 @@ V80_RX_DEBUG_ARGS
 					,rxApp2rxSar_release
 					,rxSar2ackSched_req
 #endif
+#ifdef V80_ZC
+					,rxDataRel
+					,zcRx
+					,zcRelBad
+#endif
 #if (RX_DDR_BYPASS)
 					,axis_data_count
 					,axis_max_data_count
@@ -779,7 +852,12 @@ V80_RX_DEBUG_ARGS
 					txSar2rxEng_upd_rsp,
 					//txSar2txApp_upd_rsp,
 					txSar2txEng_upd_rsp,
+#ifdef V80_ZC
+					txSar2ackTap);
+	txAckEventTap(txSar2ackTap, txSar2txApp_ack_push, ackEvent);
+#else
 					txSar2txApp_ack_push);
+#endif
 	// Port Table
 	port_table(		rxEng2portTable_check_req,
 					rxApp2portTable_listen_req,
@@ -899,7 +977,11 @@ V80_RX_DEBUG_ARGS
 			 	 	rxApp2portTable_listen_req,
 			 	 	notification,
 			 	 	rxBufferReadData,
-					rxDataRsp);
+					rxDataRsp
+#ifdef V80_ZC
+					, zcRx
+#endif
+					);
 
 	tx_app_interface<WIDTH>(	txDataReqMeta,
 						txDataReq,
@@ -935,6 +1017,55 @@ V80_RX_DEBUG_ARGS
 
 }
 
+#ifdef V80_ZC
+void toe(
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipRxData,
+#if !(RX_DDR_BYPASS)
+			stream<mmStatus>&						rxBufferWriteStatus,
+#endif
+			stream<mmStatus>&						txBufferWriteStatus,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxBufferReadData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txBufferReadData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipTxData,
+#if !(RX_DDR_BYPASS)
+			stream<mmCmd>&							rxBufferWriteCmd,
+			stream<mmCmd>&							rxBufferReadCmd,
+#endif
+			stream<mmCmd>&							txBufferWriteCmd,
+			stream<mmCmd>&							txBufferReadCmd,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxBufferWriteData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txBufferWriteData,
+
+			stream<rtlSessionLookupReply>&			sessionLookup_rsp,
+			stream<rtlSessionUpdateReply>&			sessionUpdate_rsp,
+			stream<rtlSessionLookupRequest>&		sessionLookup_req,
+			stream<rtlSessionUpdateRequest>&		sessionUpdate_req,
+			stream<ap_uint<16> >&					listenPortReq,
+			stream<appReadRequest>&					rxDataReq,
+			stream<ipTuple>&						openConnReq,
+			stream<ap_uint<16> >&					closeConnReq,
+			stream<appTxMeta>&					   txDataReqMeta,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txDataReq,
+
+			stream<bool>&							listenPortRsp,
+			stream<appNotification>&				notification,
+			stream<appRxMeta>&					rxDataRspMeta,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxDataRsp,
+			stream<openStatus>&						openConnRsp,
+			stream<appTxRsp>&					txDataRsp,
+#if RX_DDR_BYPASS
+			ap_uint<16>						axis_data_count,
+			ap_uint<16>						axis_max_data_count,
+#endif
+			ap_uint<32>								myIpAddress,
+			ap_uint<16>&							regSessionCount
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+V80_RX_DEBUG_ARGS
+V80_ZC_ARGS
+)
+#else
 void toe(	// Data & Memory Interface
 			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipRxData,
 #if !(RX_DDR_BYPASS)
@@ -988,6 +1119,7 @@ void toe(	// Data & Memory Interface
 #endif
 V80_RX_DEBUG_ARGS
 )
+#endif
 {
 #pragma HLS DATAFLOW disable_start_propagation
 #pragma HLS INTERFACE ap_ctrl_none port=return
@@ -1069,6 +1201,15 @@ V80_RX_DEBUG_ARGS
 
 	#pragma HLS INTERFACE ap_none register port=myIpAddress
 	#pragma HLS INTERFACE ap_vld port=regSessionCount
+#ifdef V80_ZC
+	#pragma HLS INTERFACE axis register port=rxDataRel name=s_axis_rx_data_rel
+	#pragma HLS INTERFACE axis register port=ackEvent name=m_axis_ack_event
+	#pragma HLS aggregate variable=rxDataRel compact=bit
+	#pragma HLS aggregate variable=ackEvent compact=bit
+	#pragma HLS aggregate variable=rxDataRspMeta compact=bit
+	#pragma HLS INTERFACE ap_none register port=zcRx
+	#pragma HLS INTERFACE ap_vld port=zcRelBad
+#endif
 #ifdef V80_RX_DEBUG
 	#pragma HLS INTERFACE ap_vld port=dbgRxHeader
 	#pragma HLS INTERFACE ap_vld port=dbgRxMeta
@@ -1164,5 +1305,80 @@ V80_RX_DEBUG_ARGS
 , maxSegmentSize
 #endif
 V80_RX_DEBUG_PASS
+V80_ZC_PASS
 );
 }
+
+#if defined(V80_ZC) && !defined(__SYNTHESIS__)
+void toe(
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipRxData,
+#if !(RX_DDR_BYPASS)
+			stream<mmStatus>&						rxBufferWriteStatus,
+#endif
+			stream<mmStatus>&						txBufferWriteStatus,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxBufferReadData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txBufferReadData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						ipTxData,
+#if !(RX_DDR_BYPASS)
+			stream<mmCmd>&							rxBufferWriteCmd,
+			stream<mmCmd>&							rxBufferReadCmd,
+#endif
+			stream<mmCmd>&							txBufferWriteCmd,
+			stream<mmCmd>&							txBufferReadCmd,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxBufferWriteData,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txBufferWriteData,
+
+			stream<rtlSessionLookupReply>&			sessionLookup_rsp,
+			stream<rtlSessionUpdateReply>&			sessionUpdate_rsp,
+			stream<rtlSessionLookupRequest>&		sessionLookup_req,
+			stream<rtlSessionUpdateRequest>&		sessionUpdate_req,
+			stream<ap_uint<16> >&					listenPortReq,
+			stream<appReadRequest>&					rxDataReq,
+			stream<ipTuple>&						openConnReq,
+			stream<ap_uint<16> >&					closeConnReq,
+			stream<appTxMeta>&					   txDataReqMeta,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						txDataReq,
+
+			stream<bool>&							listenPortRsp,
+			stream<appNotification>&				notification,
+			stream<ap_uint<16> >&					rxDataRspMeta,
+			stream<ap_axiu<DATA_WIDTH, 0, 0, 0> >&						rxDataRsp,
+			stream<openStatus>&						openConnRsp,
+			stream<appTxRsp>&					txDataRsp,
+#if RX_DDR_BYPASS
+			ap_uint<16>						axis_data_count,
+			ap_uint<16>						axis_max_data_count,
+#endif
+			ap_uint<32>								myIpAddress,
+			ap_uint<16>&							regSessionCount
+#ifdef V80_RUNTIME_MSS
+, ap_uint<16> maxSegmentSize
+#endif
+V80_RX_DEBUG_ARGS
+)
+{
+	static stream<appRxMeta> zcMeta("zcMeta");
+	static stream<appRxRelease> zcRel("zcRel");
+	static stream<appAckEvent> zcAck("zcAck");
+	ap_uint<32> zcBad = 0;
+	toe(ipRxData, rxBufferWriteStatus, txBufferWriteStatus, rxBufferReadData, txBufferReadData, ipTxData,
+			rxBufferWriteCmd, rxBufferReadCmd, txBufferWriteCmd, txBufferReadCmd, rxBufferWriteData, txBufferWriteData,
+			sessionLookup_rsp, sessionUpdate_rsp, sessionLookup_req, sessionUpdate_req,
+			listenPortReq, rxDataReq, openConnReq, closeConnReq, txDataReqMeta, txDataReq,
+			listenPortRsp, notification, zcMeta, rxDataRsp, openConnRsp, txDataRsp,
+			myIpAddress, regSessionCount
+#ifdef V80_RUNTIME_MSS
+			, maxSegmentSize
+#endif
+			V80_RX_DEBUG_PASS
+			, zcRel, zcAck, 0, zcBad);
+	while (!zcMeta.empty())
+	{
+		rxDataRspMeta.write(zcMeta.read().sessionID);
+	}
+	while (!zcAck.empty())
+	{
+		zcAck.read();
+	}
+}
+#endif

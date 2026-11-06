@@ -50,6 +50,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					,stream<rxSarAppd>&			rxApp2rxSar_release
 					,stream<ackRequest>&		rxSar2ackSched_req
 #endif
+#ifdef V80_ZC
+					,stream<appRxRelease>&		rxApp2rxSar_zcRel
+					,ap_uint<1>					zcRx
+					,ap_uint<32>&				zcRelBad
+#endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
                     ,ap_uint<16>                rxbuffer_max_data_count
@@ -68,6 +73,21 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 	static ap_uint<WINDOW_BITS> rx_adv_edge[MAX_SESSIONS];
 #pragma HLS bind_storage variable=rx_adv_edge type=RAM_1P impl=BRAM
 #pragma HLS DEPENDENCE variable=rx_adv_edge inter false
+#endif
+#ifdef V80_ZC
+	static ap_uint<2> zc_flags[MAX_SESSIONS];
+#pragma HLS bind_storage variable=zc_flags type=RAM_T2P impl=BRAM
+#pragma HLS DEPENDENCE variable=zc_flags inter false
+#pragma HLS reset variable=zc_flags off
+	static ap_uint<WINDOW_BITS> zc_cur[MAX_SESSIONS];
+#pragma HLS bind_storage variable=zc_cur type=RAM_2P impl=BRAM
+#pragma HLS DEPENDENCE variable=zc_cur inter false
+#pragma HLS reset variable=zc_cur off
+	static ap_uint<32> zc_bad = 0;
+	zcRelBad = zc_bad;
+	bool zc_cw = false;
+	ap_uint<16> zc_ca = 0;
+	ap_uint<WINDOW_BITS> zc_cv = 0;
 #endif
 
 	// Read only access from the Tx Engine
@@ -134,6 +154,12 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #ifdef V80_RX_MEM_NO_SPLIT
 				entry.appd = entry.released;
 #endif
+#ifdef V80_ZC
+				if (zc_flags[addr][0])
+				{
+					entry.appd = (ap_uint<WINDOW_BITS>)entry.recvd + 1;
+				}
+#endif
 		//Pre-calculated usedLength, windowSize to improve timing in metaLoader
 #if (WINDOW_SCALE)
 				ap_uint<WINDOW_BITS> actualWindowSize = (entry.appd - ((ap_uint<WINDOW_BITS>)entry.recvd)) - 1; // This works even for wrap around
@@ -163,7 +189,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		}
 		else
 		{
+#ifdef V80_ZC
+			rxSar2rxApp_upd_rsp.write(rxSarAppd(in_appd.sessionID, rx_table[in_appd.sessionID].appd, rx_table[in_appd.sessionID].base, 0));
+#else
 			rxSar2rxApp_upd_rsp.write(rxSarAppd(in_appd.sessionID, rx_table[in_appd.sessionID].appd));
+#endif
 		}
 	}
 	// Read or Write access from the Rx Engine
@@ -184,6 +214,13 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 				rx_table[in_recvd.sessionID].released = in_recvd.recvd;
 				rx_adv_edge[in_recvd.sessionID] = (ap_uint<WINDOW_BITS>)in_recvd.recvd - 1;
 #endif
+#ifdef V80_ZC
+				rx_table[in_recvd.sessionID].base = in_recvd.recvd;
+				zc_flags[in_recvd.sessionID] = (ap_uint<1>(1), ap_uint<1>(zcRx & zc_flags[in_recvd.sessionID][1]));
+				zc_cw = true;
+				zc_ca = in_recvd.sessionID;
+				zc_cv = 0;
+#endif
 #if (WINDOW_SCALE)
 				rx_table[in_recvd.sessionID].win_shift = in_recvd.win_shift;
 #endif
@@ -191,7 +228,16 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		}
 		else
 		{
+#ifdef V80_ZC
+			rxSarEntry eng_entry = rx_table[in_recvd.sessionID];
+			if (zc_flags[in_recvd.sessionID][0])
+			{
+				eng_entry.released = (ap_uint<WINDOW_BITS>)eng_entry.head + 1;
+			}
+			rxSar2rxEng_upd_rsp.write(eng_entry);
+#else
 			rxSar2rxEng_upd_rsp.write(rx_table[in_recvd.sessionID]);
+#endif
 		}
 	}
 #ifdef V80_RX_MEM_NO_SPLIT
@@ -202,10 +248,69 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		ap_uint<WINDOW_BITS> advertised = rx_adv_edge[rel.sessionID] - recvd;
 		ap_uint<WINDOW_BITS> opened = rel.appd - recvd - 1;
 		rx_table[rel.sessionID].released = rel.appd;
+#ifdef V80_ZC
+		zc_cw = true;
+		zc_ca = rel.sessionID;
+		zc_cv = rel.appd - rx_table[rel.sessionID].base;
+#endif
 		if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
 		{
 			rxSar2ackSched_req.write_nb(ackRequest(rel.sessionID, true));
 		}
+	}
+#endif
+#ifdef V80_ZC
+	else if(!rxApp2rxSar_zcRel.empty())
+	{
+		appRxRelease zrel = rxApp2rxSar_zcRel.read();
+		rxSarEntry zentry = rx_table[zrel.sessionID];
+		ap_uint<WINDOW_BITS> zrecvd = (ap_uint<WINDOW_BITS>)zentry.recvd;
+		ap_uint<WINDOW_BITS> zcur = zc_cur[zrel.sessionID];
+		ap_uint<WINDOW_BITS> zlim = zentry.appd - zentry.base;
+		ap_uint<WINDOW_BITS> zptr = zrel.ptr(WINDOW_BITS-1, 0);
+		ap_uint<WINDOW_BITS> znew = zentry.appd;
+		bool zopen = false;
+		ap_uint<2> zflags = zc_flags[zrel.sessionID];
+		if (zrel.arm)
+		{
+			if (zflags[0])
+			{
+				zc_flags[zrel.sessionID] = (zflags[1], ap_uint<1>(0));
+				zopen = true;
+			}
+			else
+			{
+				zc_flags[zrel.sessionID] = (ap_uint<1>(0), zflags[0]);
+			}
+		}
+		else if ((ap_uint<WINDOW_BITS>)(zptr - zcur) <= (ap_uint<WINDOW_BITS>)(zlim - zcur))
+		{
+			znew = zptr + zentry.base;
+			zopen = true;
+		}
+		else
+		{
+			zc_bad++;
+		}
+		if (zopen)
+		{
+			ap_uint<WINDOW_BITS> zadvertised = rx_adv_edge[zrel.sessionID] - zrecvd;
+			ap_uint<WINDOW_BITS> zopened = znew - zrecvd - 1;
+			rx_table[zrel.sessionID].released = znew;
+			zc_cw = true;
+			zc_ca = zrel.sessionID;
+			zc_cv = znew - zentry.base;
+			if (!zadvertised[WINDOW_BITS-1] && zopened >= MSS && zopened >= (ap_uint<WINDOW_BITS+1>(zadvertised) << 1))
+			{
+				rxSar2ackSched_req.write_nb(ackRequest(zrel.sessionID, true));
+			}
+		}
+	}
+#endif
+#ifdef V80_ZC
+	if (zc_cw)
+	{
+		zc_cur[zc_ca] = zc_cv;
 	}
 #endif
 }

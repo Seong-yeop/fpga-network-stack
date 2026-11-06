@@ -34,7 +34,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.// Copyright (c) 2015 Xilinx, 
  */
 void rx_app_stream_if(	hls::stream<appReadRequest>&	appRxDataReq,
 						hls::stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
-						hls::stream<ap_uint<16> >&		appRxDataRspMetadata,
+						hls::stream<appRxMeta>&			appRxDataRspMetadata,
 						hls::stream<rxSarAppd>&			rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
 						hls::stream<mmCmd>&				rxBufferReadCmd

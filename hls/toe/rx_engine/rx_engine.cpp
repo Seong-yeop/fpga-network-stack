@@ -1420,7 +1420,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_uint<32> pkgAddr;
 						pkgAddr(31, 30) = 0x0;
 						pkgAddr(29, WINDOW_BITS) = fsm_meta.sessionID(13, 0);
+#ifdef V80_ZC
+						pkgAddr(WINDOW_BITS-1, 0) = fsm_meta.meta.seqNumb(WINDOW_BITS-1, 0) - rxSar.base;
+#else
 						pkgAddr(WINDOW_BITS-1, 0) = fsm_meta.meta.seqNumb(WINDOW_BITS-1, 0);
+#endif
 
 						ap_int<32> seqDiff = fsm_meta.meta.seqNumb - rxSar.recvd;
 						ap_uint<32> segEnd = fsm_meta.meta.seqNumb + fsm_meta.meta.length;
@@ -1796,7 +1800,11 @@ void rxTcpFSM(			stream<rxFsmMetaData>&					fsmMetaDataFifo,
 						ap_uint<32> pkgAddr;
 						pkgAddr(31, 30) = 0x0;
 						pkgAddr(29, WINDOW_BITS) = fsm_meta.sessionID(13, 0);
+#ifdef V80_ZC
+						pkgAddr(WINDOW_BITS-1, 0) = fsm_meta.meta.seqNumb(WINDOW_BITS-1, 0) - rxSar.base;
+#else
 						pkgAddr(WINDOW_BITS-1, 0) = fsm_meta.meta.seqNumb(WINDOW_BITS-1, 0);
+#endif
 #if !(RX_DDR_BYPASS)
 						rxBufferWriteCmd.write(mmCmd(pkgAddr, fsm_meta.meta.length));
 #endif

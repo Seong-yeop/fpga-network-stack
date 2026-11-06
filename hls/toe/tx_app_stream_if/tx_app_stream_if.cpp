@@ -112,7 +112,11 @@ void tasi_metaLoader(	stream<appTxMeta>&			appTxDataReqMetaData,
 				pkgAddr(WINDOW_BITS-1, 0) = writeSar.mempt;
 
 				tasi_meta2pkgPushCmd.write(mmCmd(pkgAddr, tasi_writeMeta.length));
+#ifdef V80_ZC
+				appTxDataRsp.write(appTxRsp(tasi_writeMeta.sessionID, tasi_writeMeta.length, maxWriteLength, NO_ERROR, writeSar.mempt));
+#else
 				appTxDataRsp.write(appTxRsp(tasi_writeMeta.sessionID, tasi_writeMeta.length, maxWriteLength, NO_ERROR));
+#endif
 				txAppStream2eventEng_setEvent.write(event(TX, tasi_writeMeta.sessionID, writeSar.mempt, tasi_writeMeta.length));
 				txApp2txSar_upd_req.write(txAppTxSarQuery(tasi_writeMeta.sessionID, writeSar.mempt+tasi_writeMeta.length));
 				tai_state = READ_REQUEST;

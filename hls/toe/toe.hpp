@@ -33,6 +33,17 @@
 #include "../fns_config.hpp"
 
 // V80 nvmet debug build: RX drop-reason counters out of rx_engine (see rx_engine.cpp)
+#if defined(V80_ZC) && (!defined(V80_RX_MEM_NO_SPLIT) || RX_DDR_BYPASS || !TCP_NODELAY)
+#error "V80_ZC needs V80_RX_MEM_NO_SPLIT, RX_DDR_BYPASS=0 and TCP_NODELAY=1"
+#endif
+#ifdef V80_ZC
+#define V80_ZC_ARGS , hls::stream<appRxRelease>& rxDataRel, hls::stream<appAckEvent>& ackEvent, ap_uint<1> zcRx, ap_uint<32>& zcRelBad
+#define V80_ZC_PASS , rxDataRel, ackEvent, zcRx, zcRelBad
+#else
+#define V80_ZC_ARGS
+#define V80_ZC_PASS
+#endif
+
 #ifdef V80_RX_DEBUG
 #define V80_RX_DEBUG_ARGS , ap_uint<32>& dbgRxHeader, ap_uint<64>& dbgRxMeta, ap_uint<192>& dbgRxFsm, ap_uint<192>& dbgRxGap
 #define V80_RX_DEBUG_PASS , dbgRxHeader, dbgRxMeta, dbgRxFsm, dbgRxGap
@@ -167,10 +178,53 @@ struct appReadRequest
 	ap_uint<16> sessionID;
 	//ap_uint<16> address;
 	ap_uint<16> length;
+#ifdef V80_ZC
+	ap_uint<1> skip;
+	appReadRequest() {}
+	appReadRequest(ap_uint<16> id, ap_uint<16> len)
+			:sessionID(id), length(len), skip(0) {}
+	appReadRequest(ap_uint<16> id, ap_uint<16> len, ap_uint<1> skip)
+			:sessionID(id), length(len), skip(skip) {}
+#else
 	appReadRequest() {}
 	appReadRequest(ap_uint<16> id, ap_uint<16> len)
 			:sessionID(id), length(len) {}
+#endif
 };
+
+#ifdef V80_ZC
+struct appRxMeta
+{
+	ap_uint<16> sessionID;
+	ap_uint<20> offset;
+	ap_uint<1> skip;
+	appRxMeta() {}
+	appRxMeta(ap_uint<16> id, ap_uint<20> off, ap_uint<1> skip)
+			:sessionID(id), offset(off), skip(skip) {}
+};
+
+struct appRxRelease
+{
+	ap_uint<16> sessionID;
+	ap_uint<20> ptr;
+	ap_uint<1> arm;
+	appRxRelease() {}
+	appRxRelease(ap_uint<16> id, ap_uint<20> ptr, ap_uint<1> arm)
+			:sessionID(id), ptr(ptr), arm(arm) {}
+};
+
+struct appAckEvent
+{
+	ap_uint<16> sessionID;
+	ap_uint<20> ackd;
+	ap_uint<1> init;
+	appAckEvent() {}
+	appAckEvent(ap_uint<16> id, ap_uint<20> ackd, ap_uint<1> init)
+			:sessionID(id), ackd(ackd), init(init) {}
+};
+#else
+typedef ap_uint<16> appRxMeta;
+#endif
 
 struct appTxMeta
 {
@@ -187,9 +241,18 @@ struct appTxRsp
 	ap_uint<16> length;
 	ap_uint<30> remaining_space;
 	ap_uint<2>	error;
+#ifdef V80_ZC
+	ap_uint<20> offset;
+	appTxRsp() {}
+	appTxRsp(ap_uint<16> id, ap_uint<16> len, ap_uint<30> rem_space, ap_uint<2> err)
+		:sessionID(id), length(len), remaining_space(rem_space), error(err), offset(0) {}
+	appTxRsp(ap_uint<16> id, ap_uint<16> len, ap_uint<30> rem_space, ap_uint<2> err, ap_uint<20> off)
+		:sessionID(id), length(len), remaining_space(rem_space), error(err), offset(off) {}
+#else
 	appTxRsp() {}
 	appTxRsp(ap_uint<16> id, ap_uint<16> len, ap_uint<30> rem_space, ap_uint<2> err)
 		:sessionID(id), length(len), remaining_space(rem_space), error(err) {}
+#endif
 };
 
 
@@ -228,7 +291,7 @@ void toe_core(	// Data & Memory Interface
 
 			hls::stream<bool>&							listenPortRsp,
 			hls::stream<appNotification>&				notification,
-			hls::stream<ap_uint<16> >&					rxDataRspMeta,
+			hls::stream<appRxMeta>&					rxDataRspMeta,
 			hls::stream<net_axis<WIDTH> >&						rxDataRsp,
 			hls::stream<openStatus>&						openConnRsp,
 			hls::stream<appTxRsp>&						txDataRsp,
@@ -240,6 +303,7 @@ void toe_core(	// Data & Memory Interface
 , ap_uint<16> maxSegmentSize
 #endif
 V80_RX_DEBUG_ARGS
+V80_ZC_ARGS
 );
 
 

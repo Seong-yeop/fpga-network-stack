@@ -43,6 +43,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					,stream<rxSarAppd>&			rxApp2rxSar_release
 					,stream<ackRequest>&		rxSar2ackSched_req
 #endif
+#ifdef V80_ZC
+					,stream<appRxRelease>&		rxApp2rxSar_zcRel
+					,ap_uint<1>					zcRx
+					,ap_uint<32>&				zcRelBad
+#endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
                     ,ap_uint<16>                rxbuffer_max_data_count

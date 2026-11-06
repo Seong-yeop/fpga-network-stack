@@ -42,7 +42,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.// Copyright (c) 2015 Xilinx, 
  */
 void rx_app_stream_if(hls::stream<appReadRequest>&		appRxDataReq,
 					  hls::stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
-					  hls::stream<ap_uint<16> >&		appRxDataRspMetadata,
+					  hls::stream<appRxMeta>&			appRxDataRspMetadata,
 					  hls::stream<rxSarAppd>&			rxApp2rxSar_upd_req,
 #if !(RX_DDR_BYPASS)
 					  hls::stream<mmCmd>&				rxBufferReadCmd
@@ -60,6 +60,9 @@ void rx_app_stream_if(hls::stream<appReadRequest>&		appRxDataReq,
 
 	static ap_uint<16>				rasi_readLength;
 	static ap_uint<1>				rasi_fsmState 	= 0;
+#ifdef V80_ZC
+	static ap_uint<1>				rasi_skip;
+#endif
 
 	switch (rasi_fsmState)
 	{
@@ -73,6 +76,9 @@ void rx_app_stream_if(hls::stream<appReadRequest>&		appRxDataReq,
 					// Get app pointer
 					rxApp2rxSar_upd_req.write(rxSarAppd(app_read_request.sessionID));
 					rasi_readLength = app_read_request.length;
+#ifdef V80_ZC
+					rasi_skip = app_read_request.skip;
+#endif
 					rasi_fsmState = 1;
 				}
 			}
@@ -81,18 +87,31 @@ void rx_app_stream_if(hls::stream<appReadRequest>&		appRxDataReq,
 			if (!rxSar2rxApp_upd_rsp.empty())
 			{
 				rxSarAppd	rxSar = rxSar2rxApp_upd_rsp.read();
+#ifdef V80_ZC
+				ap_uint<WINDOW_BITS> ringOffset = rxSar.appd - rxSar.base;
+				appRxDataRspMetadata.write(appRxMeta(rxSar.sessionID, ringOffset, rasi_skip));
+				ap_uint<32> pkgAddr = 0;
+				pkgAddr(29, WINDOW_BITS) = rxSar.sessionID(13, 0);
+				pkgAddr(WINDOW_BITS-1, 0) = ringOffset;
+				if (!rasi_skip)
+				{
+					rxBufferReadCmd.write(mmCmd(pkgAddr, rasi_readLength));
+				}
+#elif !(RX_DDR_BYPASS)
 				appRxDataRspMetadata.write(rxSar.sessionID);
-#if !(RX_DDR_BYPASS)
 				ap_uint<32> pkgAddr = 0;
 				pkgAddr(29, WINDOW_BITS) = rxSar.sessionID(13, 0);
 				pkgAddr(WINDOW_BITS-1, 0) = rxSar.appd;
 				rxBufferReadCmd.write(mmCmd(pkgAddr, rasi_readLength));
 #else
+				appRxDataRspMetadata.write(rxSar.sessionID);
 				rxBufferReadCmd.write(1);
 #endif
 				// Update app read pointer
 				rxApp2rxSar_upd_req.write(rxSarAppd(rxSar.sessionID, rxSar.appd+rasi_readLength)); // Update me
-#ifdef V80_RX_MEM_NO_SPLIT
+#ifdef V80_ZC
+				rxAppReadEnd.write(rxSarAppd(rxSar.sessionID, rxSar.appd+rasi_readLength, 0, rasi_skip));
+#elif defined(V80_RX_MEM_NO_SPLIT)
 				rxAppReadEnd.write(rxSarAppd(rxSar.sessionID, rxSar.appd+rasi_readLength));
 #endif
 				rasi_fsmState = 0;
