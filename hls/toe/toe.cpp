@@ -1323,6 +1323,7 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS aggregate variable=ackEvent compact=bit
 	#pragma HLS aggregate variable=rxDataRspMeta compact=bit
 	#pragma HLS INTERFACE ap_none register port=zcRx
+	#pragma HLS stable variable=zcRx
 	#pragma HLS INTERFACE ap_vld port=zcRelBad
 #endif
 #ifdef V80_RX_DEBUG
