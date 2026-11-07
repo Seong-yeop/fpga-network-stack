@@ -100,6 +100,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 	static ap_uint<16> ml_txLeft = 0;
 	static ap_uint<32> ml_txSeq = 0;
 	static ap_uint<16> ml_txStep = DATA_WIDTH/8;
+	static ap_uint<16> ml_txCut = DATA_WIDTH/8;
 	static ap_uint<32> ml_txAck = 0;
 	static ap_uint<16> ml_txWin = 0;
 #endif
@@ -205,6 +206,7 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 				if (txSplit)
 				{
 					meta.length = txStep;
+					ml_txCut = txStep;
 					ml_txLeft = ml_curEvent.length - txStep;
 					ml_txSeq = txSar.not_ackd;
 					ml_txAck = rxSar.recvd;
@@ -231,8 +233,6 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 					ml_FsmState = 2;
 				}
 #endif
-
-
 				// Send a packet only if there is data or we want to send an empty probing message
 				if (meta.length != 0)// || ml_curEvent.retransmit) //TODO retransmit boolean currently not set, should be removed
 				{
@@ -772,18 +772,18 @@ void metaLoader(hls::stream<extendedEvent>&				eventEng2txEng_event,
 #if (TCP_NODELAY) && defined(V80_RUNTIME_MSS)
 	case 2:
 	{
-		txEngBypass txStepMarker = (txStep(15, DATA_KEEP_BITS), ap_uint<1>(1));
-		ml_txSeq += txStep;
+		txEngBypass txStepMarker = (ml_txCut(15, DATA_KEEP_BITS), ap_uint<1>(1));
+		ml_txSeq += ml_txCut;
 		tx_engine_meta segMeta(ml_txSeq, ml_txAck, 1, 0, 0, 0);
 		segMeta.window_size = ml_txWin;
 #if (WINDOW_SCALE)
 		segMeta.win_shift = 0;
 #endif
-		if (ml_txLeft > txStep)
+		if (ml_txLeft > ml_txCut)
 		{
-			segMeta.length = txStep;
+			segMeta.length = ml_txCut;
 			txEng_isDDRbypass.write(txStepMarker);
-			ml_txLeft -= txStep;
+			ml_txLeft -= ml_txCut;
 		}
 		else
 		{
