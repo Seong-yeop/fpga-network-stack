@@ -29,6 +29,28 @@
 
 using namespace hls;
 
+#ifdef V80_ZC
+enum rxSarWinKind {RXW_TX, RXW_REL, RXW_INIT};
+struct rxSarWinOp
+{
+	ap_uint<2> kind;
+	ap_uint<16> sessionID;
+	ap_uint<32> recvd;
+	ap_uint<WINDOW_BITS> edge;
+	bool hold;
+	ap_uint<4> win_shift;
+	ap_uint<32> head;
+	ap_uint<32> offset;
+	bool gap;
+	bool sack_ok;
+	rxSarWinOp() {}
+	rxSarWinOp(rxSarWinKind k, ap_uint<16> id, const rxSarReply& r, ap_uint<WINDOW_BITS> e, bool h)
+				:kind(k), sessionID(id), recvd(r.recvd), edge(e), hold(h), win_shift(r.win_shift), head(r.head), offset(r.offset), gap(r.gap), sack_ok(r.sack_ok) {}
+	rxSarWinOp(rxSarWinKind k, ap_uint<16> id, ap_uint<32> rc, ap_uint<WINDOW_BITS> e = 0)
+				:kind(k), sessionID(id), recvd(rc), edge(e), hold(false), win_shift(0), head(0), offset(0), gap(false), sack_ok(false) {}
+};
+#endif
+
 /** @defgroup rx_sar_table RX SAR Table
  *  @ingroup tcp_module
  *  @TODO rename why SAR
@@ -38,10 +60,16 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<ap_uint<16> >&		txEng2rxSar_req, //read only
 					stream<rxSarEntry>&			rxSar2rxEng_upd_rsp,
 					stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
+#ifndef V80_ZC
 					stream<rxSarReply>&			rxSar2txEng_rsp
+#else
+					stream<rxSarWinOp>&			rxSar2win
+#endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
+#ifndef V80_ZC
 					,stream<ackRequest>&		rxSar2ackSched_req
+#endif
 #endif
 #ifdef V80_ZC
 					,stream<appRxRelease>&		rxApp2rxSar_zcRel
@@ -53,3 +81,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
                     ,ap_uint<16>                rxbuffer_max_data_count
 #endif
 );
+
+#ifdef V80_ZC
+void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
+					stream<rxSarReply>&			rxSar2txEng_rsp,
+					stream<ackRequest>&			rxSar2ackSched_req);
+#endif

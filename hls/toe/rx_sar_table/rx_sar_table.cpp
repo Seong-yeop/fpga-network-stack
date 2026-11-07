@@ -45,10 +45,16 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<ap_uint<16> >&		txEng2rxSar_req, //read only
 					stream<rxSarEntry>&			rxSar2rxEng_upd_rsp,
 					stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
+#ifndef V80_ZC
 					stream<rxSarReply>&			rxSar2txEng_rsp
+#else
+					stream<rxSarWinOp>&			rxSar2win
+#endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
+#ifndef V80_ZC
 					,stream<ackRequest>&		rxSar2ackSched_req
+#endif
 #endif
 #ifdef V80_ZC
 					,stream<appRxRelease>&		rxApp2rxSar_zcRel
@@ -69,7 +75,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #pragma HLS bind_storage variable=rx_table type=RAM_1P impl=BRAM
 #pragma HLS DEPENDENCE variable=rx_table inter false
-#ifdef V80_RX_MEM_NO_SPLIT
+#if defined(V80_RX_MEM_NO_SPLIT) && !defined(V80_ZC)
 	static ap_uint<WINDOW_BITS> rx_adv_edge[MAX_SESSIONS];
 #pragma HLS bind_storage variable=rx_adv_edge type=RAM_1P impl=BRAM
 #pragma HLS DEPENDENCE variable=rx_adv_edge inter false
@@ -177,15 +183,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
       reply.windowSize = actualWindowSize(15, 0);
 #endif
 
+#elif defined(V80_ZC)
+				rxSar2win.write(rxSarWinOp(RXW_TX, addr, reply, entry.released, zc_flags[addr][0]));
 #else  // !(RX_DDR_BYPASS)		
 #ifdef V80_RX_MEM_NO_SPLIT
 				entry.appd = entry.released;
-#endif
-#ifdef V80_ZC
-				if (zc_flags[addr][0])
-				{
-					entry.appd = (ap_uint<WINDOW_BITS>)entry.recvd + 1;
-				}
 #endif
 		//Pre-calculated usedLength, windowSize to improve timing in metaLoader
 #if (WINDOW_SCALE)
@@ -204,7 +206,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #endif // RX_DDR_BYPASS
 
+#ifndef V80_ZC
 		rxSar2txEng_rsp.write(reply);
+#endif
 	}
 	// Read or Write access from the Rx App I/F to update the application pointer
 #ifdef V80_ZC
@@ -249,7 +253,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 				rx_table[in_recvd.sessionID].appd = in_recvd.recvd;
 #ifdef V80_RX_MEM_NO_SPLIT
 				rx_table[in_recvd.sessionID].released = in_recvd.recvd;
+#ifdef V80_ZC
+				rxSar2win.write(rxSarWinOp(RXW_INIT, in_recvd.sessionID, in_recvd.recvd));
+#else
 				rx_adv_edge[in_recvd.sessionID] = (ap_uint<WINDOW_BITS>)in_recvd.recvd - 1;
+#endif
 #endif
 #ifdef V80_ZC
 				rx_table[in_recvd.sessionID].base = in_recvd.recvd;
@@ -285,26 +293,28 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #endif
 	{
 		rxSarAppd rel = rxApp2rxSar_release.read();
+#ifdef V80_ZC
+		rx_table[rel.sessionID].released = rel.appd;
+		zc_cw = true;
+		zc_ca = rel.sessionID;
+		zc_cv = rel.appd - rx_table[rel.sessionID].base;
+		rxSar2win.write(rxSarWinOp(RXW_REL, rel.sessionID, rx_table[rel.sessionID].recvd, rel.appd));
+#else
 		ap_uint<WINDOW_BITS> recvd = (ap_uint<WINDOW_BITS>)rx_table[rel.sessionID].recvd;
 		ap_uint<WINDOW_BITS> advertised = rx_adv_edge[rel.sessionID] - recvd;
 		ap_uint<WINDOW_BITS> opened = rel.appd - recvd - 1;
 		rx_table[rel.sessionID].released = rel.appd;
-#ifdef V80_ZC
-		zc_cw = true;
-		zc_ca = rel.sessionID;
-		zc_cv = rel.appd - rx_table[rel.sessionID].base;
-#endif
 		if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
 		{
 			rxSar2ackSched_req.write(ackRequest(rel.sessionID, true));
 		}
+#endif
 	}
 #endif
 #ifdef V80_ZC
 	else if(zc_zr)
 	{
 		rxSarEntry zentry = rx_table[zrel.sessionID];
-		ap_uint<WINDOW_BITS> zrecvd = (ap_uint<WINDOW_BITS>)zentry.recvd;
 		ap_uint<WINDOW_BITS> zcur = zc_cur[zrel.sessionID];
 		ap_uint<WINDOW_BITS> zlim = zentry.appd - zentry.base;
 		ap_uint<WINDOW_BITS> zptr = zrel.ptr(WINDOW_BITS-1, 0);
@@ -334,16 +344,11 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 		}
 		if (zopen)
 		{
-			ap_uint<WINDOW_BITS> zadvertised = rx_adv_edge[zrel.sessionID] - zrecvd;
-			ap_uint<WINDOW_BITS> zopened = znew - zrecvd - 1;
 			rx_table[zrel.sessionID].released = znew;
 			zc_cw = true;
 			zc_ca = zrel.sessionID;
-			zc_cv = znew - zentry.base;
-			if (!zadvertised[WINDOW_BITS-1] && zopened >= MSS && zopened >= (ap_uint<WINDOW_BITS+1>(zadvertised) << 1))
-			{
-				rxSar2ackSched_req.write(ackRequest(zrel.sessionID, true));
-			}
+			zc_cv = zrel.arm ? zlim : zptr;
+			rxSar2win.write(rxSarWinOp(RXW_REL, zrel.sessionID, zentry.recvd, znew));
 		}
 	}
 #endif
@@ -354,3 +359,49 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 	}
 #endif
 }
+
+#ifdef V80_ZC
+void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
+					stream<rxSarReply>&			rxSar2txEng_rsp,
+					stream<ackRequest>&			rxSar2ackSched_req)
+{
+#pragma HLS PIPELINE II=1
+#pragma HLS INLINE off
+	static ap_uint<WINDOW_BITS> rx_adv_edge[MAX_SESSIONS];
+#pragma HLS bind_storage variable=rx_adv_edge type=RAM_1P impl=BRAM
+#pragma HLS DEPENDENCE variable=rx_adv_edge inter false
+	if (!rxSar2win.empty())
+	{
+		rxSarWinOp op = rxSar2win.read();
+		ap_uint<WINDOW_BITS> recvd = (ap_uint<WINDOW_BITS>)op.recvd;
+		if (op.kind == RXW_INIT)
+		{
+			rx_adv_edge[op.sessionID] = recvd - 1;
+		}
+		else if (op.kind == RXW_TX)
+		{
+			ap_uint<WINDOW_BITS> edge = op.hold ? (ap_uint<WINDOW_BITS>)(recvd + 1) : op.edge;
+			ap_uint<WINDOW_BITS> actualWindowSize = (edge - recvd) - 1;
+			rxSarReply reply;
+			reply.recvd = op.recvd;
+			reply.win_shift = op.win_shift;
+			reply.sack_ok = op.sack_ok;
+			reply.head = op.head;
+			reply.offset = op.offset;
+			reply.gap = op.gap;
+			reply.windowSize = actualWindowSize >> op.win_shift;
+			rx_adv_edge[op.sessionID] = recvd + (((ap_uint<WINDOW_BITS>)reply.windowSize) << op.win_shift);
+			rxSar2txEng_rsp.write(reply);
+		}
+		else
+		{
+			ap_uint<WINDOW_BITS> advertised = rx_adv_edge[op.sessionID] - recvd;
+			ap_uint<WINDOW_BITS> opened = op.edge - recvd - 1;
+			if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
+			{
+				rxSar2ackSched_req.write(ackRequest(op.sessionID, true));
+			}
+		}
+	}
+}
+#endif

@@ -843,6 +843,11 @@ V80_ZC_ARGS
 #ifdef V80_RX_MEM_NO_SPLIT
 	static stream<ackRequest>				rxSar2ackSched_req("rxSar2ackSched_req");
 	static stream<ackRequest>				ackSched_req("ackSched_req");
+#ifdef V80_ZC
+	static stream<rxSarWinOp>				rxSar2win("rxSar2win");
+	#pragma HLS stream variable=rxSar2win						depth=2
+	#pragma HLS aggregate variable=rxSar2win compact=bit
+#endif
 	#pragma HLS stream variable=rxSar2ackSched_req				depth=8
 	#pragma HLS stream variable=ackSched_req					depth=8
 	#pragma HLS aggregate variable=rxSar2ackSched_req compact=bit
@@ -934,10 +939,16 @@ V80_ZC_ARGS
 					txEng2rxSar_req,
 					rxSar2rxEng_upd_rsp,
 					rxSar2rxApp_upd_rsp,
+#ifndef V80_ZC
 					rxSar2txEng_rsp
+#else
+					rxSar2win
+#endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,rxApp2rxSar_release
+#ifndef V80_ZC
 					,rxSar2ackSched_req
+#endif
 #endif
 #ifdef V80_ZC
 					,rxDataRel
@@ -949,6 +960,9 @@ V80_ZC_ARGS
 					,axis_max_data_count
 #endif
 				);
+#ifdef V80_ZC
+	rxSarWindow(rxSar2win, rxSar2txEng_rsp, rxSar2ackSched_req);
+#endif
 
 	// TX Sar Table
 	sack_scoreboard(rxEng2sack_req, txEng2sack_clear, sack2rxEng_rsp);

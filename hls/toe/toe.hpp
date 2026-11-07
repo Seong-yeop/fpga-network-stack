@@ -33,8 +33,8 @@
 #include "../fns_config.hpp"
 
 // V80 nvmet debug build: RX drop-reason counters out of rx_engine (see rx_engine.cpp)
-#if defined(V80_ZC) && (!defined(V80_RX_MEM_NO_SPLIT) || RX_DDR_BYPASS || !TCP_NODELAY)
-#error "V80_ZC needs V80_RX_MEM_NO_SPLIT, RX_DDR_BYPASS=0 and TCP_NODELAY=1"
+#if defined(V80_ZC) && (!defined(V80_RX_MEM_NO_SPLIT) || RX_DDR_BYPASS || !TCP_NODELAY || !WINDOW_SCALE)
+#error "V80_ZC needs V80_RX_MEM_NO_SPLIT, RX_DDR_BYPASS=0, TCP_NODELAY=1 and WINDOW_SCALE=1"
 #endif
 #ifdef V80_ZC
 #define V80_ZC_ARGS , hls::stream<appRxRelease>& rxDataRel, hls::stream<appAckEvent>& ackEvent, ap_uint<1> zcRx, ap_uint<32>& zcRelBad
