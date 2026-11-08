@@ -35,7 +35,8 @@ static const ap_uint<8> AD_TIME = (TIME_64us > 255) ? ap_uint<32>(255) : TIME_64
 
 void ack_scheduler(	stream<ackRequest>&		requestIn,
 					stream<ackClear>&		clearIn,
-					stream<ap_uint<16> >&	ackOut);
+					stream<ap_uint<16> >&	ackOut,
+					ap_uint<4>				ackEvery);
 
 void ack_delay(	stream<extendedEvent>&	input,
 				stream<ap_uint<16> >&	ackIn,

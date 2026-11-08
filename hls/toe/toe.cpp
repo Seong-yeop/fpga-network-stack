@@ -1010,11 +1010,14 @@ V80_ZC_ARGS
 	#pragma HLS stream variable=txEngFifoReadCount		depth=64
 	event_engine(txApp2eventEng_setEvent, rxEng2eventEng_setEvent, timer2eventEng_setEvent, eventEng2ackDelay_event,
 					ackDelayFifoReadCount, ackDelayFifoWriteCount, txEngFifoReadCount);
+#ifndef V80_ZC
+	const ap_uint<4> ackEvery = 2;
+#endif
 #ifdef V80_RX_MEM_NO_SPLIT
 	stream_merger(rxEng2ackSched_req, rxSar2ackSched_req, ackSched_req);
-	ack_scheduler(ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack);
+	ack_scheduler(ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack, ackEvery);
 #else
-	ack_scheduler(rxEng2ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack);
+	ack_scheduler(rxEng2ackSched_req, ackDelay2ackSched_clear, ackSched2ackDelay_ack, ackEvery);
 #endif
 	ack_delay(eventEng2ackDelay_event, ackSched2ackDelay_ack, eventEng2txEng_event, ackDelay2ackSched_clear, ackDelayFifoReadCount, ackDelayFifoWriteCount);
 
@@ -1340,6 +1343,8 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS stable variable=myIpAddress
 	#pragma HLS stable variable=maxSegmentSize
 	#pragma HLS INTERFACE ap_vld port=zcRelBad
+	#pragma HLS INTERFACE ap_none register port=ackEvery
+	#pragma HLS stable variable=ackEvery
 #endif
 #ifdef V80_RX_DEBUG
 	#pragma HLS INTERFACE ap_vld port=dbgRxHeader
@@ -1502,7 +1507,7 @@ V80_RX_DEBUG_ARGS
 			, maxSegmentSize
 #endif
 			V80_RX_DEBUG_PASS
-			, zcRel, zcAck, 0, zcBad);
+			, zcRel, zcAck, 0, zcBad, ap_uint<4>(2));
 	while (!zcMeta.empty())
 	{
 		rxDataRspMeta.write(zcMeta.read().sessionID);

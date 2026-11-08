@@ -33,7 +33,8 @@ using namespace hls;
 
 void ack_scheduler(	stream<ackRequest>&		requestIn,
 					stream<ackClear>&		clearIn,
-					stream<ap_uint<16> >&	ackOut)
+					stream<ap_uint<16> >&	ackOut,
+					ap_uint<4>				ackEvery)
 {
 #pragma HLS PIPELINE II=1
 #pragma HLS INLINE off
@@ -44,6 +45,9 @@ void ack_scheduler(	stream<ackRequest>&		requestIn,
 	#pragma HLS DEPENDENCE variable=ad_table inter false
 
 	static ap_uint<16> ad_pointer = 0;
+	static bool ad_first = false;
+	static bool ad_second = true;
+	static ap_uint<4> ad_last = 0;
 	static bool ad_fwValid[AD_FORWARD_DEPTH] = {};
 	static ap_uint<16> ad_fwId[AD_FORWARD_DEPTH];
 	static ackEntry ad_fwEntry[AD_FORWARD_DEPTH];
@@ -54,6 +58,14 @@ void ack_scheduler(	stream<ackRequest>&		requestIn,
 	#pragma HLS ARRAY_PARTITION variable=ad_fwEntry complete
 	#pragma HLS ARRAY_PARTITION variable=ad_fwZero complete
 	#pragma HLS ARRAY_PARTITION variable=ad_fwOne complete
+
+	bool first = ad_first;
+	bool second = ad_second;
+	ap_uint<4> last = ad_last;
+	ap_uint<4> every = (ackEvery == 0) ? ap_uint<4>(2) : ackEvery;
+	ad_first = every == 1;
+	ad_second = every <= 2;
+	ad_last = (every < 2) ? ap_uint<4>(0) : ap_uint<4>(every - 2);
 
 	ackRequest req;
 	ackClear clr;
@@ -92,76 +104,50 @@ void ack_scheduler(	stream<ackRequest>&		requestIn,
 
 	bool t2 = e.time == 2;
 	bool pz = e.pend == 0;
-	ap_uint<8> time = e.time;
-	bool nz = tz;
-	bool n1 = t1;
-	ap_uint<2> keep = e.pend;
-	ap_uint<2> less = e.pend - 1;
-	bool want = !pz;
-	switch (op)
-	{
-	case 1:
-		if (req.nodelay)
-		{
-			time = 0;
-			nz = true;
-			n1 = false;
-			keep = (e.pend == 3) ? ap_uint<2>(3) : ap_uint<2>(e.pend + 1);
-			less = (e.pend == 3) ? ap_uint<2>(2) : e.pend;
-			want = true;
-		}
-		else if (pz && tz)
-		{
-			time = AD_TIME;
-			nz = AD_TIME == 0;
-			n1 = AD_TIME == 1;
-		}
-		else if (pz)
-		{
-			time = 0;
-			nz = true;
-			n1 = false;
-			keep = 1;
-			less = 0;
-			want = true;
-		}
-		break;
-	case 2:
-		time = 0;
-		nz = true;
-		n1 = false;
-		want = false;
-		if (clr.all)
-		{
-			keep = 0;
-		}
-		break;
-	default:
-		if (!tz && !t1)
-		{
-			time = e.time - 1;
-			n1 = t2;
-		}
-		else if (t1)
-		{
-			time = 0;
-			nz = true;
-			n1 = false;
-			if (pz)
-			{
-				keep = 1;
-				less = 0;
-				want = true;
-			}
-		}
-		break;
-	}
+	bool hit = tz ? first : e.hit;
+	bool isReq = op == 1;
+	bool isClr = op == 2;
+	bool isTick = op == 0;
+	bool nd = isReq && req.nodelay;
+	bool dreq = isReq && !req.nodelay;
+	bool dec = isTick && !tz && !t1;
+	bool tickEnd = isTick && t1;
+	bool stopN = nd || isClr || tickEnd;
+	bool nowP = (dreq && hit) || tickEnd;
+	bool startP = dreq && !hit && tz;
+	bool moreP = dreq && !hit && !tz;
+	bool stopP = nd || isClr || nowP;
+	ap_uint<8> timeRun = dec ? ap_uint<8>(e.time - 1) : e.time;
+	bool n1Run = dec ? t2 : t1;
+	ap_uint<8> timeN = stopN ? ap_uint<8>(0) : timeRun;
+	ap_uint<8> timeP = stopP ? ap_uint<8>(0) : (startP ? AD_TIME : timeRun);
+	bool nzN = stopN || tz;
+	bool nzP = stopP || (startP ? (AD_TIME == 0) : tz);
+	bool n1N = !stopN && n1Run;
+	bool n1P = !stopP && (startP ? (AD_TIME == 1) : n1Run);
+	bool wantP = nd || nowP;
+	bool wantN = !isClr;
+	ap_uint<2> keepP = (nd || nowP) ? ap_uint<2>(1) : ap_uint<2>(0);
+	ap_uint<2> lessP = (nd || nowP) ? ap_uint<2>(0) : ap_uint<2>(3);
+	ap_uint<2> keepN = nd ? ((e.pend == 3) ? ap_uint<2>(3) : ap_uint<2>(e.pend + 1)) : ((isClr && clr.all) ? ap_uint<2>(0) : e.pend);
+	ap_uint<2> lessN = nd ? ((e.pend == 3) ? ap_uint<2>(2) : e.pend) : ap_uint<2>(e.pend - 1);
+	bool hitP = startP ? second : (moreP ? (bool)(e.cnt >= last) : (bool)e.hit);
+	ap_uint<4> cntP = startP ? ap_uint<4>(1) : (moreP ? ap_uint<4>(e.cnt + 1) : e.cnt);
+
+	ap_uint<8> time = pz ? timeP : timeN;
+	bool nz = pz ? nzP : nzN;
+	bool n1 = pz ? n1P : n1N;
+	bool want = pz ? wantP : wantN;
+	ap_uint<2> keep = pz ? keepP : keepN;
+	ap_uint<2> less = pz ? lessP : lessN;
 
 	bool sent = false;
 	if (want)
 	{
 		sent = ackOut.write_nb(id);
 	}
+	e.hit = pz ? hitP : (bool)e.hit;
+	e.cnt = pz ? cntP : e.cnt;
 	e.time = time;
 	e.pend = sent ? less : keep;
 

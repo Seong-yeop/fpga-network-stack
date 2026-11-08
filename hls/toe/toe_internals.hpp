@@ -507,6 +507,8 @@ struct ackEntry
 {
 	ap_uint<8>	time;
 	ap_uint<2>	pend;
+	ap_uint<4>	cnt;
+	bool		hit;
 };
 
 struct rstEvent : public event
