@@ -74,6 +74,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					,stream<appRxRelease>&		rxApp2rxSar_zcRel
 					,ap_uint<1>					zcRx
 					,ap_uint<32>&				zcRelBad
+					,ap_uint<5>					winGrid
 #endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
@@ -83,5 +84,6 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #ifdef V80_ZC
 void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
-					stream<ackRequest>&			rxSar2ackSched_req);
+					stream<ackRequest>&			rxSar2ackSched_req,
+					ap_uint<5>					winGrid);
 #endif

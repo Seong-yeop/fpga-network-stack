@@ -29,6 +29,28 @@
 
 using namespace hls;
 
+#ifdef V80_ZC
+static ap_uint<WINDOW_BITS> rxSarGridMask(ap_uint<5> grid)
+{
+#pragma HLS INLINE
+	ap_uint<WINDOW_BITS> mask = 0;
+	for (int i = 0; i < WINDOW_BITS - 2; i++)
+	{
+#pragma HLS UNROLL
+		mask[i] = i < grid;
+	}
+	return mask;
+}
+
+static ap_uint<WINDOW_BITS> rxSarGridWindow(ap_uint<WINDOW_BITS> edge, ap_uint<WINDOW_BITS> recvd, ap_uint<WINDOW_BITS> mask)
+{
+#pragma HLS INLINE
+	ap_uint<WINDOW_BITS> avail = (edge - recvd) - 1;
+	ap_uint<WINDOW_BITS> low = (ap_uint<WINDOW_BITS>)(edge - 1) & mask;
+	return (low > avail) ? ap_uint<WINDOW_BITS>(0) : ap_uint<WINDOW_BITS>(avail - low);
+}
+#endif
+
 /** @ingroup rx_sar_table
  * 	This data structure stores the RX(receiving) sliding window
  *  and handles concurrent access from the @ref rx_engine, @ref rx_app_if
@@ -59,6 +81,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					,stream<appRxRelease>&		rxApp2rxSar_zcRel
 					,ap_uint<1>					zcRx
 					,ap_uint<32>&				zcRelBad
+					,ap_uint<5>					winGrid
 #endif
 #if (RX_DDR_BYPASS)
                     ,ap_uint<16>                rxbuffer_data_count
@@ -90,6 +113,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #pragma HLS reset variable=zc_cur off
 	static ap_uint<32> zc_bad = 0;
 	static bool zc_hold = false;
+	static ap_uint<WINDOW_BITS> zc_mask = 0;
+	ap_uint<WINDOW_BITS> zc_grid = zc_mask;
+	zc_mask = rxSarGridMask(winGrid);
 	zcRelBad = zc_bad;
 	bool zc_cw = false;
 	ap_uint<16> zc_ca = 0;
@@ -184,7 +210,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #elif defined(V80_ZC)
 				ap_uint<WINDOW_BITS> edge = zc_flags[addr][0] ? (ap_uint<WINDOW_BITS>)(entry.recvd + 1) : entry.released;
-				ap_uint<WINDOW_BITS> actualWindowSize = (edge - (ap_uint<WINDOW_BITS>)entry.recvd) - 1;
+				ap_uint<WINDOW_BITS> actualWindowSize = rxSarGridWindow(edge, (ap_uint<WINDOW_BITS>)entry.recvd, zc_grid);
 				reply.windowSize = actualWindowSize >> entry.win_shift;
 				rxSar2win.write(rxSarWinOp(RXW_TX, addr, reply, reply.windowSize, false));
 #else  // !(RX_DDR_BYPASS)		
@@ -352,13 +378,17 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #ifdef V80_ZC
 void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
-					stream<ackRequest>&			rxSar2ackSched_req)
+					stream<ackRequest>&			rxSar2ackSched_req,
+					ap_uint<5>					winGrid)
 {
 #pragma HLS PIPELINE II=1
 #pragma HLS INLINE off
 	static ap_uint<WINDOW_BITS> rx_adv_edge[MAX_SESSIONS];
 #pragma HLS bind_storage variable=rx_adv_edge type=RAM_1P impl=BRAM
 #pragma HLS DEPENDENCE variable=rx_adv_edge inter false
+	static ap_uint<WINDOW_BITS> rxw_mask = 0;
+	ap_uint<WINDOW_BITS> rxw_grid = rxw_mask;
+	rxw_mask = rxSarGridMask(winGrid);
 	if (!rxSar2win.empty())
 	{
 		rxSarWinOp op = rxSar2win.read();
@@ -374,7 +404,7 @@ void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
 		else if (op.kind == RXW_REL)
 		{
 			ap_uint<WINDOW_BITS> advertised = rx_adv_edge[op.sessionID] - recvd;
-			ap_uint<WINDOW_BITS> opened = op.edge - recvd - 1;
+			ap_uint<WINDOW_BITS> opened = rxSarGridWindow(op.edge, recvd, rxw_grid);
 			if (!advertised[WINDOW_BITS-1] && opened >= MSS && opened >= (ap_uint<WINDOW_BITS+1>(advertised) << 1))
 			{
 				rxSar2ackSched_req.write(ackRequest(op.sessionID, true));

@@ -953,6 +953,7 @@ V80_ZC_ARGS
 					,rxDataRel
 					,zcRx
 					,zcRelBad
+					,winGrid
 #endif
 #if (RX_DDR_BYPASS)
 					,axis_data_count
@@ -960,7 +961,7 @@ V80_ZC_ARGS
 #endif
 				);
 #ifdef V80_ZC
-	rxSarWindow(rxSar2win, rxSar2ackSched_req);
+	rxSarWindow(rxSar2win, rxSar2ackSched_req, winGrid);
 #endif
 
 	// TX Sar Table
@@ -1345,6 +1346,8 @@ V80_RX_DEBUG_ARGS
 	#pragma HLS INTERFACE ap_vld port=zcRelBad
 	#pragma HLS INTERFACE ap_none register port=ackEvery
 	#pragma HLS stable variable=ackEvery
+	#pragma HLS INTERFACE ap_none register port=winGrid
+	#pragma HLS stable variable=winGrid
 #endif
 #ifdef V80_RX_DEBUG
 	#pragma HLS INTERFACE ap_vld port=dbgRxHeader
@@ -1507,7 +1510,7 @@ V80_RX_DEBUG_ARGS
 			, maxSegmentSize
 #endif
 			V80_RX_DEBUG_PASS
-			, zcRel, zcAck, 0, zcBad, ap_uint<4>(2));
+			, zcRel, zcAck, 0, zcBad, ap_uint<4>(2), ap_uint<5>(0));
 	while (!zcMeta.empty())
 	{
 		rxDataRspMeta.write(zcMeta.read().sessionID);
