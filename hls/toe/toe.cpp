@@ -939,10 +939,9 @@ V80_ZC_ARGS
 					txEng2rxSar_req,
 					rxSar2rxEng_upd_rsp,
 					rxSar2rxApp_upd_rsp,
-#ifndef V80_ZC
 					rxSar2txEng_rsp
-#else
-					rxSar2win
+#ifdef V80_ZC
+					,rxSar2win
 #endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,rxApp2rxSar_release
@@ -961,7 +960,7 @@ V80_ZC_ARGS
 #endif
 				);
 #ifdef V80_ZC
-	rxSarWindow(rxSar2win, rxSar2txEng_rsp, rxSar2ackSched_req);
+	rxSarWindow(rxSar2win, rxSar2ackSched_req);
 #endif
 
 	// TX Sar Table

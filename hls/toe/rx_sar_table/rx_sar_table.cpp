@@ -45,10 +45,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<ap_uint<16> >&		txEng2rxSar_req, //read only
 					stream<rxSarEntry>&			rxSar2rxEng_upd_rsp,
 					stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
-#ifndef V80_ZC
 					stream<rxSarReply>&			rxSar2txEng_rsp
-#else
-					stream<rxSarWinOp>&			rxSar2win
+#ifdef V80_ZC
+					,stream<rxSarWinOp>&			rxSar2win
 #endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
@@ -184,7 +183,10 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 #endif
 
 #elif defined(V80_ZC)
-				rxSar2win.write(rxSarWinOp(RXW_TX, addr, reply, entry.released, zc_flags[addr][0]));
+				ap_uint<WINDOW_BITS> edge = zc_flags[addr][0] ? (ap_uint<WINDOW_BITS>)(entry.recvd + 1) : entry.released;
+				ap_uint<WINDOW_BITS> actualWindowSize = (edge - (ap_uint<WINDOW_BITS>)entry.recvd) - 1;
+				reply.windowSize = actualWindowSize >> entry.win_shift;
+				rxSar2win.write(rxSarWinOp(RXW_TX, addr, reply, reply.windowSize, false));
 #else  // !(RX_DDR_BYPASS)		
 #ifdef V80_RX_MEM_NO_SPLIT
 				entry.appd = entry.released;
@@ -206,9 +208,7 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #endif // RX_DDR_BYPASS
 
-#ifndef V80_ZC
 		rxSar2txEng_rsp.write(reply);
-#endif
 	}
 	// Read or Write access from the Rx App I/F to update the application pointer
 #ifdef V80_ZC
@@ -316,29 +316,19 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 	{
 		rxSarEntry zentry = rx_table[zrel.sessionID];
 		ap_uint<WINDOW_BITS> zcur = zc_cur[zrel.sessionID];
+		ap_uint<2> zflags = zc_flags[zrel.sessionID];
 		ap_uint<WINDOW_BITS> zlim = zentry.appd - zentry.base;
 		ap_uint<WINDOW_BITS> zptr = zrel.ptr(WINDOW_BITS-1, 0);
-		ap_uint<WINDOW_BITS> znew = zentry.appd;
-		bool zopen = false;
-		ap_uint<2> zflags = zc_flags[zrel.sessionID];
+		bool zin = (ap_uint<WINDOW_BITS>)(zptr - zcur) <= (ap_uint<WINDOW_BITS>)(zlim - zcur);
+		bool zopen = zrel.arm ? (bool)zflags[0] : zin;
+		ap_uint<WINDOW_BITS> znew = zrel.arm ? zentry.appd : (ap_uint<WINDOW_BITS>)(zptr + zentry.base);
+		ap_uint<2> zfnew = 0;
+		zfnew[1] = zflags[0] & zflags[1];
 		if (zrel.arm)
 		{
-			if (zflags[0])
-			{
-				zc_flags[zrel.sessionID] = (zflags[1], ap_uint<1>(0));
-				zopen = true;
-			}
-			else
-			{
-				zc_flags[zrel.sessionID] = (ap_uint<1>(0), zflags[0]);
-			}
+			zc_flags[zrel.sessionID] = zfnew;
 		}
-		else if ((ap_uint<WINDOW_BITS>)(zptr - zcur) <= (ap_uint<WINDOW_BITS>)(zlim - zcur))
-		{
-			znew = zptr + zentry.base;
-			zopen = true;
-		}
-		else
+		else if (!zin)
 		{
 			zc_bad++;
 		}
@@ -348,8 +338,8 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 			zc_cw = true;
 			zc_ca = zrel.sessionID;
 			zc_cv = zrel.arm ? zlim : zptr;
-			rxSar2win.write(rxSarWinOp(RXW_REL, zrel.sessionID, zentry.recvd, znew));
 		}
+		rxSar2win.write(rxSarWinOp(zopen ? RXW_REL : RXW_NOP, zrel.sessionID, zentry.recvd, znew));
 	}
 #endif
 #ifdef V80_ZC
@@ -362,7 +352,6 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #ifdef V80_ZC
 void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
-					stream<rxSarReply>&			rxSar2txEng_rsp,
 					stream<ackRequest>&			rxSar2ackSched_req)
 {
 #pragma HLS PIPELINE II=1
@@ -380,20 +369,9 @@ void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
 		}
 		else if (op.kind == RXW_TX)
 		{
-			ap_uint<WINDOW_BITS> edge = op.hold ? (ap_uint<WINDOW_BITS>)(recvd + 1) : op.edge;
-			ap_uint<WINDOW_BITS> actualWindowSize = (edge - recvd) - 1;
-			rxSarReply reply;
-			reply.recvd = op.recvd;
-			reply.win_shift = op.win_shift;
-			reply.sack_ok = op.sack_ok;
-			reply.head = op.head;
-			reply.offset = op.offset;
-			reply.gap = op.gap;
-			reply.windowSize = actualWindowSize >> op.win_shift;
-			rx_adv_edge[op.sessionID] = recvd + (((ap_uint<WINDOW_BITS>)reply.windowSize) << op.win_shift);
-			rxSar2txEng_rsp.write(reply);
+			rx_adv_edge[op.sessionID] = recvd + (op.edge << op.win_shift);
 		}
-		else
+		else if (op.kind == RXW_REL)
 		{
 			ap_uint<WINDOW_BITS> advertised = rx_adv_edge[op.sessionID] - recvd;
 			ap_uint<WINDOW_BITS> opened = op.edge - recvd - 1;

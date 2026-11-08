@@ -30,7 +30,7 @@
 using namespace hls;
 
 #ifdef V80_ZC
-enum rxSarWinKind {RXW_TX, RXW_REL, RXW_INIT};
+enum rxSarWinKind {RXW_TX, RXW_REL, RXW_INIT, RXW_NOP};
 struct rxSarWinOp
 {
 	ap_uint<2> kind;
@@ -60,10 +60,9 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 					stream<ap_uint<16> >&		txEng2rxSar_req, //read only
 					stream<rxSarEntry>&			rxSar2rxEng_upd_rsp,
 					stream<rxSarAppd>&			rxSar2rxApp_upd_rsp,
-#ifndef V80_ZC
 					stream<rxSarReply>&			rxSar2txEng_rsp
-#else
-					stream<rxSarWinOp>&			rxSar2win
+#ifdef V80_ZC
+					,stream<rxSarWinOp>&			rxSar2win
 #endif
 #ifdef V80_RX_MEM_NO_SPLIT
 					,stream<rxSarAppd>&			rxApp2rxSar_release
@@ -84,6 +83,5 @@ void rx_sar_table(	stream<rxSarRecvd>&			rxEng2rxSar_upd_req,
 
 #ifdef V80_ZC
 void rxSarWindow(	stream<rxSarWinOp>&			rxSar2win,
-					stream<rxSarReply>&			rxSar2txEng_rsp,
 					stream<ackRequest>&			rxSar2ackSched_req);
 #endif
